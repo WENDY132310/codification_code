@@ -1,0 +1,18 @@
+# ─────────────────────────────────────────────
+#  DataLab · Compresión de Datos
+#  requirements.txt
+# ─────────────────────────────────────────────
+
+# Core
+streamlit>=1.32.0
+numpy>=1.26.0
+pandas>=2.2.0
+
+# Image processing (optional but recommended)
+Pillow>=10.2.0
+
+# For styling dataframes
+matplotlib>=3.8.0
+
+# Type hints backport (Python < 3.11)
+# typing_extensions>=4.9.0
