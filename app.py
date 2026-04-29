@@ -1,24 +1,30 @@
-#!/usr/bin/env python3
-"""
-DataLab v3.0 - Compresión de Datos · Codificación + Decodificación
-Texto→Huffman | Imagen→DCT/JPEG | Audio→μ-Law G.711 | Video→RLE+H.264
-"""
 from __future__ import annotations
-import heapq, io, math, struct, time, wave
+
+import heapq
+import io
+import math
+import struct
+import time
+import wave
 from abc import ABC, abstractmethod
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 
+# ── Optional dependencies ──────────────────────────────────────────────────
 try:
     from PIL import Image as PILImage
-    PIL_OK = True
+    PIL_AVAILABLE = True
 except ImportError:
-    PIL_OK = False
+    PIL_AVAILABLE = False
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE CONFIG  ← must be the very first Streamlit call
+# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="DataLab · Compresión",
     page_icon="⚡",
@@ -26,2140 +32,2662 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  INJECT CSS
+#  CUSTOM CSS — "Terminal Lab" Dark Aesthetic
 # ─────────────────────────────────────────────────────────────────────────────
 def inject_css() -> None:
+    """
+    Inject custom CSS for the dark 'lab terminal' aesthetic.
+    Uses IBM Plex Mono (mono) + Syne (display) as font pair.
+    Palette: #030712 bg · #06b6d4 cyan · #8b5cf6 violet
+    """
     st.markdown(
         """
-<style>
-/* ── Fonts & Reset ── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-:root {
-  --bg0:#030712; --bg1:#070d1a; --bg2:#0d1424; --bg3:#141e30; --bg4:#1c2a40;
-  --cy:#06b6d4; --cy2:rgba(6,182,212,0.15); --cy3:rgba(6,182,212,0.30);
-  --vi:#8b5cf6; --vi2:rgba(139,92,246,0.15);
-  --gr:#10b981; --am:#f59e0b; --rd:#ef4444;
-  --tx:#cdd9e5; --txd:#8b9cb5; --mu:#4e5f7a;
-  --bd:rgba(6,182,212,0.13); --bds:rgba(6,182,212,0.28);
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body,[class*="css"],[data-testid]{
-  font-family:'Inter',Arial,sans-serif!important;
-  background:var(--bg0)!important;
-  color:var(--tx)!important;
-}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-track{background:var(--bg1)}
-::-webkit-scrollbar-thumb{background:var(--cy);border-radius:3px}
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap');
 
-/* ── Hide Streamlit UI ── */
-#MainMenu,footer,header,
-.stDeployButton,[data-testid="stToolbar"],
-[data-testid="stStatusWidget"]{display:none!important;visibility:hidden!important}
-section[data-testid="stSidebar"]{display:none!important}
-.main .block-container{padding:0 2rem 4rem!important;max-width:1400px!important}
+        /* ── CSS Variables ────────────────────────────────────── */
+        :root {
+            --bg-0:    #030712;
+            --bg-1:    #070d1a;
+            --bg-2:    #0d1424;
+            --bg-3:    #141e30;
+            --bg-4:    #1a2540;
+            --cyan:    #06b6d4;
+            --cyan-dim: rgba(6,182,212,0.12);
+            --violet:  #8b5cf6;
+            --violet-dim: rgba(139,92,246,0.12);
+            --green:   #10b981;
+            --amber:   #f59e0b;
+            --red:     #ef4444;
+            --txt:     #cdd9e5;
+            --txt-dim: #8b9cb5;
+            --muted:   #4e5f7a;
+            --border:  rgba(6,182,212,0.14);
+            --border-strong: rgba(6,182,212,0.30);
+            --glow-cyan: 0 0 20px rgba(6,182,212,0.15);
+            --glow-violet: 0 0 20px rgba(139,92,246,0.15);
+            --radius-sm: 8px;
+            --radius-md: 14px;
+            --radius-lg: 20px;
+        }
 
-/* ── HEADER ── */
-.app-hdr{
-  background:linear-gradient(135deg,var(--bg1) 0%,var(--bg2) 100%);
-  border-bottom:1px solid var(--bd);
-  padding:1.1rem 2rem;
-  margin:0 -2rem 1.8rem;
-  display:flex;align-items:center;justify-content:space-between;
-}
-.app-hdr-left{display:flex;align-items:center;gap:1rem}
-.app-hdr-icon{
-  width:44px;height:44px;border-radius:11px;flex-shrink:0;
-  background:linear-gradient(135deg,var(--cy),var(--vi));
-  display:flex;align-items:center;justify-content:center;font-size:1.3rem;
-  box-shadow:0 0 20px rgba(6,182,212,0.2);
-}
-.app-hdr-title{
-  font-size:1.4rem;font-weight:800;letter-spacing:-0.04em;
-  background:linear-gradient(100deg,var(--cy) 0%,#a78bfa 55%,var(--vi) 100%);
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
-}
-.app-hdr-sub{
-  font-size:0.67rem;color:var(--mu);margin-top:0.1rem;letter-spacing:0.03em;
-}
-.app-hdr-badges{display:flex;gap:0.35rem;flex-wrap:wrap;align-items:center}
-.badge{
-  font-size:0.58rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
-  padding:0.18rem 0.55rem;border-radius:999px;border:1px solid;
-}
-.bc{color:var(--cy);border-color:var(--cy3);background:var(--cy2)}
-.bv{color:var(--vi);border-color:rgba(139,92,246,0.3);background:var(--vi2)}
-.bg{color:var(--gr);border-color:rgba(16,185,129,0.28);background:rgba(16,185,129,0.08)}
-.ba{color:var(--am);border-color:rgba(245,158,11,0.28);background:rgba(245,158,11,0.08)}
+        /* ── Global Reset ─────────────────────────────────────── */
+        html, body, [class*="css"], [data-testid] {
+            font-family: 'Syne', sans-serif !important;
+            background-color: var(--bg-0) !important;
+            color: var(--txt) !important;
+        }
+        * { box-sizing: border-box; }
 
-/* ── TABS ── */
-.stTabs [data-baseweb="tab-list"]{
-  background:var(--bg2)!important;border-radius:13px!important;
-  padding:5px!important;gap:4px!important;border:1px solid var(--bd)!important;
-}
-.stTabs [data-baseweb="tab"]{
-  background:transparent!important;border-radius:9px!important;
-  color:var(--mu)!important;font-weight:600!important;font-size:0.81rem!important;
-  padding:0.48rem 1.3rem!important;border:none!important;transition:all 0.2s!important;
-}
-.stTabs [aria-selected="true"]{
-  background:linear-gradient(135deg,var(--cy2),var(--vi2))!important;
-  color:var(--cy)!important;border:1px solid var(--bds)!important;
-}
-.stTabs [data-baseweb="tab-panel"]{padding:1.5rem 0 0!important}
-.stTabs [data-baseweb="tab-highlight"],
-.stTabs [data-baseweb="tab-border"]{display:none!important}
+        /* ── Hide Streamlit Chrome ────────────────────────────── */
+        #MainMenu, footer, header { visibility: hidden !important; }
+        .stDeployButton, [data-testid="stToolbar"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
 
-/* ── METRICS ── */
-[data-testid="stMetric"]{
-  background:var(--bg2)!important;border:1px solid var(--bd)!important;
-  border-radius:13px!important;padding:0.95rem 1.15rem!important;position:relative;overflow:hidden;
-}
-[data-testid="stMetric"]::after{
-  content:'';position:absolute;bottom:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,var(--vi),var(--cy));
-}
-[data-testid="stMetricLabel"]>div{
-  font-size:0.6rem!important;color:var(--mu)!important;
-  letter-spacing:0.1em!important;text-transform:uppercase!important;
-}
-[data-testid="stMetricValue"]>div{
-  font-size:1.55rem!important;font-weight:700!important;color:var(--cy)!important;
-  letter-spacing:-0.03em!important;
-}
-[data-testid="stMetricDelta"]{font-size:0.66rem!important;color:var(--txd)!important}
-[data-testid="stMetricDelta"] svg{display:none!important}
+        /* ── Main Container ───────────────────────────────────── */
+        .main .block-container {
+            padding: 0 2rem 4rem !important;
+            max-width: 1440px !important;
+        }
 
-/* ── FILE UPLOADER ── */
-[data-testid="stFileUploader"]{
-  background:var(--bg2)!important;
-  border:1.5px dashed rgba(6,182,212,0.28)!important;
-  border-radius:16px!important;padding:1.2rem!important;
-  transition:border-color 0.2s!important;
-}
-[data-testid="stFileUploader"]:hover{border-color:var(--cy)!important}
+        /* ── Scrollbar ────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-1); }
+        ::-webkit-scrollbar-thumb { background: var(--cyan); border-radius: 3px; }
 
-/* ── EXPANDER ── */
-details[data-testid="stExpander"]{
-  background:var(--bg2)!important;border:1px solid var(--bd)!important;
-  border-radius:13px!important;overflow:hidden;
-}
-details[data-testid="stExpander"] summary{
-  background:var(--bg3)!important;color:var(--cy)!important;
-  font-size:0.75rem!important;font-weight:500!important;
-  padding:0.65rem 1rem!important;letter-spacing:0.02em!important;
-}
-details[data-testid="stExpander"][open] summary{border-bottom:1px solid var(--bd)!important}
+        /* ═══════════════════════════════════════════════════════
+           APP HEADER
+        ═══════════════════════════════════════════════════════ */
+        .app-header-wrap {
+            background: var(--bg-1);
+            border-bottom: 1px solid var(--border);
+            padding: 1.2rem 0 1.4rem;
+            margin: 0 -2rem 2rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
+        }
+        .app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.5rem;
+        }
+        .header-left { display: flex; align-items: center; gap: 1.25rem; }
+        .header-icon {
+            width: 48px; height: 48px;
+            background: linear-gradient(135deg, var(--cyan), var(--violet));
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.4rem;
+            box-shadow: var(--glow-cyan);
+            flex-shrink: 0;
+        }
+        .app-title {
+            font-size: 1.55rem;
+            font-weight: 800;
+            background: linear-gradient(100deg, var(--cyan) 0%, #a78bfa 60%, var(--violet) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.04em;
+            line-height: 1.1;
+            margin: 0;
+        }
+        .app-subtitle {
+            font-family: 'IBM Plex Mono', monospace !important;
+            color: var(--muted);
+            font-size: 0.7rem;
+            letter-spacing: 0.06em;
+            margin-top: 0.2rem;
+        }
+        .header-badges { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+        .hbadge {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            padding: 0.22rem 0.65rem;
+            border-radius: 999px;
+            border: 1px solid;
+        }
+        .hbadge-c { color: var(--cyan); border-color: var(--border-strong); background: var(--cyan-dim); }
+        .hbadge-v { color: var(--violet); border-color: rgba(139,92,246,0.3); background: var(--violet-dim); }
+        .hbadge-g { color: var(--green); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.1); }
 
-/* ── CODE BLOCKS ── */
-.stCode,[data-testid="stCode"]{
-  background:#010508!important;border:1px solid var(--bd)!important;border-radius:13px!important;
-}
-code{font-family:'Courier New',monospace!important;font-size:0.76rem!important}
+        /* ═══════════════════════════════════════════════════════
+           TABS
+        ═══════════════════════════════════════════════════════ */
+        .stTabs [data-baseweb="tab-list"] {
+            background: var(--bg-2) !important;
+            border-radius: var(--radius-md) !important;
+            padding: 5px !important;
+            gap: 4px !important;
+            border: 1px solid var(--border) !important;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background: transparent !important;
+            border-radius: var(--radius-sm) !important;
+            color: var(--muted) !important;
+            font-weight: 600 !important;
+            font-size: 0.82rem !important;
+            padding: 0.55rem 1.4rem !important;
+            border: none !important;
+            transition: all 0.25s ease !important;
+            letter-spacing: 0.02em !important;
+        }
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, var(--cyan-dim), var(--violet-dim)) !important;
+            color: var(--cyan) !important;
+            border: 1px solid var(--border-strong) !important;
+        }
+        .stTabs [data-baseweb="tab-panel"] { padding: 1.75rem 0 0 !important; }
+        .stTabs [data-baseweb="tab-highlight"],
+        .stTabs [data-baseweb="tab-border"] { display: none !important; }
 
-/* ── DATAFRAME ── */
-[data-testid="stDataFrame"]{
-  border:1px solid var(--bd)!important;border-radius:13px!important;overflow:hidden!important;
-}
+        /* ═══════════════════════════════════════════════════════
+           CARDS & CONTAINERS
+        ═══════════════════════════════════════════════════════ */
+        .card {
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .card-glow::after {
+            content: '';
+            position: absolute;
+            top: -40px; right: -40px;
+            width: 120px; height: 120px;
+            background: radial-gradient(circle, rgba(6,182,212,0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .card-accent {
+            background: var(--bg-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .card-accent::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--cyan) 0%, var(--violet) 100%);
+        }
 
-/* ── BUTTONS ── */
-.stButton>button{
-  background:linear-gradient(135deg,var(--cy),var(--vi))!important;
-  color:#fff!important;border:none!important;border-radius:10px!important;
-  font-weight:700!important;font-size:0.82rem!important;
-  padding:0.5rem 1.8rem!important;
-  transition:all 0.2s!important;box-shadow:0 2px 14px rgba(6,182,212,0.22)!important;
-}
-.stButton>button:hover{transform:translateY(-2px)!important;box-shadow:0 6px 26px rgba(6,182,212,0.38)!important}
+        /* ═══════════════════════════════════════════════════════
+           SECTION TITLES
+        ═══════════════════════════════════════════════════════ */
+        .section-label {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin: 1.5rem 0 0.85rem;
+        }
+        .section-label .sl-icon {
+            font-size: 0.9rem;
+        }
+        .section-label .sl-text {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--cyan);
+        }
+        .section-label::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+        }
 
-/* ── SELECT/SLIDER ── */
-[data-testid="stSelectbox"]>div>div{
-  background:var(--bg2)!important;border:1px solid var(--bds)!important;
-  border-radius:10px!important;color:var(--tx)!important;
-}
+        /* ═══════════════════════════════════════════════════════
+           ST.METRIC OVERRIDES
+        ═══════════════════════════════════════════════════════ */
+        [data-testid="stMetric"] {
+            background: var(--bg-2) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: var(--radius-md) !important;
+            padding: 1.1rem 1.3rem !important;
+            position: relative;
+            overflow: hidden;
+        }
+        [data-testid="stMetric"]::before {
+            content: '';
+            position: absolute;
+            bottom: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--violet), var(--cyan));
+        }
+        [data-testid="stMetricLabel"] > div {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.62rem !important;
+            color: var(--muted) !important;
+            letter-spacing: 0.1em !important;
+            text-transform: uppercase !important;
+        }
+        [data-testid="stMetricValue"] > div {
+            font-size: 1.7rem !important;
+            font-weight: 700 !important;
+            color: var(--cyan) !important;
+            font-family: 'IBM Plex Mono', monospace !important;
+            letter-spacing: -0.03em !important;
+        }
+        [data-testid="stMetricDelta"] {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.7rem !important;
+            color: var(--txt-dim) !important;
+        }
+        [data-testid="stMetricDelta"] svg { display: none !important; }
 
-/* ── SECTION LABEL ── */
-.sec{display:flex;align-items:center;gap:0.6rem;margin:1.3rem 0 0.7rem}
-.sec .st{font-size:0.61rem;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:var(--cy)}
-.sec::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--bd),transparent)}
+        /* ═══════════════════════════════════════════════════════
+           FILE UPLOADER
+        ═══════════════════════════════════════════════════════ */
+        [data-testid="stFileUploader"] {
+            background: var(--bg-2) !important;
+            border: 1.5px dashed rgba(6,182,212,0.28) !important;
+            border-radius: var(--radius-lg) !important;
+            padding: 1.5rem !important;
+            transition: border-color 0.25s !important;
+        }
+        [data-testid="stFileUploader"]:hover {
+            border-color: var(--cyan) !important;
+            box-shadow: var(--glow-cyan) !important;
+        }
+        [data-testid="stFileUploaderDropzone"] {
+            background: transparent !important;
+        }
 
-/* ── INFO BOXES ── */
-.ibox{
-  display:flex;gap:0.8rem;align-items:flex-start;
-  background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.22);
-  border-radius:13px;padding:0.9rem 1.1rem;margin:0.6rem 0;
-}
-.ibox.v{background:rgba(139,92,246,0.06);border-color:rgba(139,92,246,0.22)}
-.ibox.a{background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.22)}
-.ibox.g{background:rgba(16,185,129,0.06);border-color:rgba(16,185,129,0.22)}
-.ibox .ic{font-size:0.72rem;color:var(--tx);line-height:1.7}
-.ibox .ic strong{color:var(--cy)}.ibox.v .ic strong{color:var(--vi)}
-.ibox.a .ic strong{color:var(--am)}.ibox.g .ic strong{color:var(--gr)}
+        /* ═══════════════════════════════════════════════════════
+           EXPANDER
+        ═══════════════════════════════════════════════════════ */
+        details[data-testid="stExpander"] {
+            background: var(--bg-2) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: var(--radius-md) !important;
+            overflow: hidden;
+        }
+        details[data-testid="stExpander"] summary {
+            background: var(--bg-3) !important;
+            color: var(--cyan) !important;
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.78rem !important;
+            font-weight: 500 !important;
+            letter-spacing: 0.04em !important;
+            padding: 0.75rem 1rem !important;
+        }
+        details[data-testid="stExpander"][open] summary {
+            border-bottom: 1px solid var(--border) !important;
+        }
 
-/* ── PIPELINE ── */
-.pipeline{
-  display:flex;align-items:center;margin:0.8rem 0;
-  overflow-x:auto;padding-bottom:0.3rem;gap:0;
-}
-.pnode{
-  background:var(--bg3);border:1px solid var(--bd);border-radius:13px;
-  padding:0.6rem 0.85rem;text-align:center;min-width:95px;flex-shrink:0;
-}
-.pnode.enc{border-color:var(--cy);background:var(--cy2);box-shadow:0 0 16px rgba(6,182,212,0.15)}
-.pnode.dec{border-color:var(--vi);background:var(--vi2);box-shadow:0 0 16px rgba(139,92,246,0.15)}
-.pnode.done{border-color:var(--gr);background:rgba(16,185,129,0.08)}
-.pnode .pi{font-size:1.1rem}
-.pnode .pl{font-size:0.55rem;color:var(--mu);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.1rem}
-.parr{color:var(--mu);font-size:0.9rem;padding:0 0.28rem;flex-shrink:0}
-.parr.e{color:var(--cy)}.parr.d{color:var(--vi)}
+        /* ═══════════════════════════════════════════════════════
+           CODE BLOCKS
+        ═══════════════════════════════════════════════════════ */
+        .stCode, [data-testid="stCode"] {
+            background: #010508 !important;
+            border: 1px solid rgba(6,182,212,0.18) !important;
+            border-radius: var(--radius-md) !important;
+        }
+        code { font-family: 'IBM Plex Mono', monospace !important; font-size: 0.78rem !important; }
 
-/* ── DIRECTION HEADER ── */
-.dirhdr{
-  display:flex;align-items:center;gap:0.7rem;
-  padding:0.75rem 1.1rem;border-radius:13px;margin:1rem 0 0.4rem;
-}
-.dirhdr.enc{background:linear-gradient(90deg,rgba(6,182,212,0.1),transparent);border-left:3px solid var(--cy)}
-.dirhdr.dec{background:linear-gradient(90deg,rgba(139,92,246,0.1),transparent);border-left:3px solid var(--vi)}
-.dirhdr .dt{font-size:0.92rem;font-weight:700}
-.dirhdr.enc .dt{color:var(--cy)}.dirhdr.dec .dt{color:var(--vi)}
-.dirhdr .ds{font-size:0.62rem;color:var(--mu);margin-top:0.1rem}
+        /* ═══════════════════════════════════════════════════════
+           DATAFRAME
+        ═══════════════════════════════════════════════════════ */
+        [data-testid="stDataFrame"] {
+            border: 1px solid var(--border) !important;
+            border-radius: var(--radius-md) !important;
+            overflow: hidden !important;
+        }
 
-/* ── STEP DETAIL ── */
-.sdt{
-  font-family:'Courier New',monospace;font-size:0.7rem;
-  color:var(--txd);line-height:1.8;white-space:pre-wrap;
-}
+        /* ═══════════════════════════════════════════════════════
+           BUTTONS
+        ═══════════════════════════════════════════════════════ */
+        .stButton > button {
+            background: linear-gradient(135deg, var(--cyan) 0%, var(--violet) 100%) !important;
+            color: #fff !important;
+            border: none !important;
+            border-radius: 10px !important;
+            font-weight: 700 !important;
+            font-family: 'Syne', sans-serif !important;
+            font-size: 0.85rem !important;
+            padding: 0.55rem 2rem !important;
+            letter-spacing: 0.03em !important;
+            transition: all 0.2s ease !important;
+            box-shadow: 0 2px 12px rgba(6,182,212,0.2) !important;
+        }
+        .stButton > button:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 6px 24px rgba(6,182,212,0.35) !important;
+        }
 
-/* ── VERIFY BANNERS ── */
-.vok{
-  display:flex;align-items:center;gap:0.7rem;
-  background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);
-  border-radius:13px;padding:0.85rem 1.1rem;margin:0.6rem 0;
-}
-.vlo{
-  display:flex;align-items:center;gap:0.7rem;
-  background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.3);
-  border-radius:13px;padding:0.85rem 1.1rem;margin:0.6rem 0;
-}
-.vam{
-  display:flex;align-items:center;gap:0.7rem;
-  background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);
-  border-radius:13px;padding:0.85rem 1.1rem;margin:0.6rem 0;
-}
-.vtx{font-size:0.72rem;line-height:1.65}
+        /* ═══════════════════════════════════════════════════════
+           PROGRESS BAR
+        ═══════════════════════════════════════════════════════ */
+        [data-testid="stProgressBar"] > div > div {
+            background: linear-gradient(90deg, var(--cyan) 0%, var(--violet) 100%) !important;
+            border-radius: 999px !important;
+        }
+        [data-testid="stProgressBar"] > div {
+            background: var(--bg-3) !important;
+            border-radius: 999px !important;
+            height: 6px !important;
+        }
 
-/* ── BARS ── */
-.ebar{background:var(--bg3);border-radius:999px;height:8px;width:100%;overflow:hidden;margin:0.3rem 0}
-.ebf{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--gr),var(--cy),var(--vi))}
-.rbar{background:var(--bg3);border-radius:999px;height:6px;width:100%;overflow:hidden;margin-top:0.4rem}
-.rbf{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--cy),var(--vi))}
+        /* ═══════════════════════════════════════════════════════
+           SELECTBOX
+        ═══════════════════════════════════════════════════════ */
+        [data-testid="stSelectbox"] > div > div {
+            background: var(--bg-2) !important;
+            border: 1px solid var(--border-strong) !important;
+            border-radius: 10px !important;
+            color: var(--txt) !important;
+        }
 
-/* ── ALGO CARD ── */
-.acard{background:var(--bg3);border:1px solid var(--bd);border-radius:13px;padding:1rem 1.1rem;margin-bottom:0.6rem}
-.acard-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:0.3rem}
-.acard-name{font-weight:700;font-size:0.87rem;color:var(--tx)}
-.acard-tag{font-size:0.57rem;padding:0.15rem 0.5rem;border-radius:999px}
-.acard-desc{font-size:0.67rem;color:var(--mu);line-height:1.5}
-.tc{color:var(--cy);background:var(--cy2);border:1px solid var(--cy3)}
-.tv{color:var(--vi);background:var(--vi2);border:1px solid rgba(139,92,246,0.3)}
-.tg{color:var(--gr);background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25)}
+        /* ═══════════════════════════════════════════════════════
+           CUSTOM HTML COMPONENTS
+        ═══════════════════════════════════════════════════════ */
+        .info-box {
+            display: flex;
+            gap: 0.9rem;
+            align-items: flex-start;
+            background: rgba(6,182,212,0.06);
+            border: 1px solid rgba(6,182,212,0.22);
+            border-radius: var(--radius-md);
+            padding: 1rem 1.25rem;
+            margin: 0.75rem 0;
+        }
+        .info-box.violet {
+            background: rgba(139,92,246,0.06);
+            border-color: rgba(139,92,246,0.22);
+        }
+        .info-box.amber {
+            background: rgba(245,158,11,0.06);
+            border-color: rgba(245,158,11,0.22);
+        }
+        .info-box .ib-icon { font-size: 1.05rem; line-height: 1.5; }
+        .info-box .ib-content {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.75rem;
+            color: var(--txt);
+            line-height: 1.7;
+        }
+        .info-box .ib-content strong { color: var(--cyan); }
+        .info-box.violet .ib-content strong { color: var(--violet); }
+        .info-box.amber  .ib-content strong { color: var(--amber); }
 
-/* ── NO FILE ── */
-.nofile{
-  text-align:center;padding:2.5rem 1.5rem;
-  background:var(--bg2);border:1.5px dashed var(--bd);border-radius:18px;margin-top:1rem;
-}
-.nofile .nfi{font-size:2rem;margin-bottom:0.5rem}
-.nofile .nft{font-size:0.92rem;font-weight:600;color:var(--txd);margin-bottom:0.3rem}
-.nofile .nfs{font-size:0.65rem;color:var(--mu)}
+        .formula-display {
+            background: var(--bg-0);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--cyan);
+            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            padding: 0.75rem 1.25rem;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.82rem;
+            color: var(--cyan);
+            margin: 0.4rem 0;
+        }
 
-/* ── HUFFMAN TREE ── */
-.tree-wrap{
-  background:#f8fafc;border:1px solid #e2e8f0;border-radius:13px;
-  padding:1rem;overflow-x:auto;margin:0.7rem 0;
-}
-</style>
-""",
+        .step-row {
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-start;
+            margin-bottom: 0.85rem;
+        }
+        .step-num {
+            min-width: 30px; height: 30px;
+            background: linear-gradient(135deg, var(--cyan), var(--violet));
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.68rem; font-weight: 700;
+            color: #fff;
+            font-family: 'IBM Plex Mono', monospace;
+            flex-shrink: 0;
+            margin-top: 0.1rem;
+            box-shadow: 0 2px 8px rgba(6,182,212,0.3);
+        }
+        .step-body {
+            flex: 1;
+            background: var(--bg-3);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.7rem 1rem;
+        }
+        .step-title {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--cyan);
+            margin-bottom: 0.2rem;
+        }
+        .step-detail {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--txt-dim);
+            line-height: 1.65;
+        }
+
+        .algo-card {
+            background: var(--bg-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 1.1rem 1.25rem;
+            margin-bottom: 0.75rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .algo-card .ac-top {
+            display: flex; align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.4rem;
+        }
+        .algo-card .ac-name {
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--txt);
+        }
+        .algo-card .ac-tag {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.6rem;
+            padding: 0.18rem 0.55rem;
+            border-radius: 999px;
+        }
+        .algo-card .ac-desc {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--muted);
+            line-height: 1.55;
+        }
+        .tag-c { color: var(--cyan); background: var(--cyan-dim); border: 1px solid var(--border-strong); }
+        .tag-v { color: var(--violet); background: var(--violet-dim); border: 1px solid rgba(139,92,246,0.3); }
+        .tag-g { color: var(--green); background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.25); }
+        .tag-a { color: var(--amber); background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.25); }
+
+        .result-bar-wrap {
+            background: var(--bg-3);
+            border-radius: 999px;
+            height: 8px; width: 100%;
+            overflow: hidden; margin-top: 0.5rem;
+        }
+        .result-bar-fill {
+            height: 100%; border-radius: 999px;
+            background: linear-gradient(90deg, var(--cyan), var(--violet));
+            transition: width 0.6s ease;
+        }
+
+        .huffman-code-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: var(--bg-3);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.2rem 0.5rem;
+            margin: 2px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.68rem;
+        }
+        .huffman-sym { color: var(--txt); font-weight: 600; }
+        .huffman-bits { color: var(--cyan); }
+        .huffman-len { color: var(--muted); }
+
+        .stat-mini {
+            display: flex; flex-direction: column;
+            background: var(--bg-3);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            text-align: center;
+        }
+        .stat-mini .sm-val {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 1.3rem; font-weight: 600;
+            color: var(--cyan);
+        }
+        .stat-mini .sm-lbl {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.6rem; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.1em;
+            margin-top: 0.1rem;
+        }
+
+        .entropy-bar-bg {
+            background: var(--bg-3);
+            border-radius: 999px;
+            height: 10px; width: 100%; overflow: hidden;
+            margin: 0.4rem 0;
+        }
+        .entropy-bar-fill {
+            height: 100%; border-radius: 999px;
+            background: linear-gradient(90deg, var(--green) 0%, var(--cyan) 60%, var(--violet) 100%);
+        }
+
+        .no-file-state {
+            text-align: center;
+            padding: 3rem 2rem;
+            background: var(--bg-2);
+            border: 1.5px dashed var(--border);
+            border-radius: var(--radius-lg);
+            margin-top: 1.5rem;
+        }
+        .no-file-state .nfs-icon {
+            font-size: 2.5rem; margin-bottom: 0.75rem;
+        }
+        .no-file-state .nfs-title {
+            font-size: 1rem; font-weight: 600;
+            color: var(--txt-dim); margin-bottom: 0.4rem;
+        }
+        .no-file-state .nfs-sub {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem; color: var(--muted);
+        }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
 #  DATA CLASSES
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
 
 @dataclass
-class Stats:
+class EstadisticasInfo:
+    """All information-theory statistics computed from a byte sequence."""
     frecuencias: Dict[str, int]
     probabilidades: Dict[str, float]
-    entropia: float
-    longitud_promedio: float
-    eficiencia: float
-    redundancia: float
+    entropia: float           # H(X) in bits/symbol
+    longitud_promedio: float  # L̄ = Σ pᵢ·lᵢ
+    eficiencia: float         # η = H / L̄
+    redundancia: float        # R = 1 − η
     total_simbolos: int
     simbolos_unicos: int
-    entropia_maxima: float
+    entropia_maxima: float    # log₂(N) — upper bound
 
 
 @dataclass
-class Resultado:
-    nombre: str
-    tipo: str                       # lossless | lossy | lossy*
-    datos_orig: bytes
-    sz_orig: int
-    datos_cod: bytes
-    sz_cod: int
-    tasa: float
-    reduccion: float
-    t_enc_ms: float
-    pasos_enc: List[Dict[str, Any]]
-    datos_dec: bytes
-    sz_dec: int
-    t_dec_ms: float
-    pasos_dec: List[Dict[str, Any]]
-    identico: bool
-    n_dif: int
-    error: float
-    codigos: Optional[Dict[str, str]] = None
-    arbol: Optional[Any] = None
+class ResultadoCompresion:
+    """Typed result container from any compression algorithm."""
+    nombre_algoritmo: str
+    datos_originales: bytes
+    datos_comprimidos: bytes
+    tamaño_original: int
+    tamaño_comprimido: int
+    tasa_compresion: float    # original / compressed
+    ratio_reduccion: float    # 1 − (comp/orig)
+    tiempo_ms: float
+    pasos: List[Dict[str, Any]] = field(default_factory=list)
+    tabla_codigos: Optional[Dict[str, str]] = None
+    tabla_lzw: Optional[List[Dict]] = None
+    es_stub: bool = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ANALYZERS  (Shannon information theory)
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  ABSTRACT BASE CLASS — Information Analyzer
+# ═════════════════════════════════════════════════════════════════════════════
 
-class Analizador(ABC):
-    def __init__(self, datos: bytes):
-        self._d = datos
+class AnalizadorInformacion(ABC):
+    """
+    Abstract base for Shannon information-theory analysis.
+
+    Subclasses implement ``_extraer_simbolos()`` to define the
+    fundamental unit of information (character, byte, pixel, sample).
+
+    Core formulas:
+        H(X) = −∑ p(xᵢ)·log₂p(xᵢ)          (entropy)
+        L̄    =  ∑ p(xᵢ)·lᵢ                 (avg code length)
+        η    = H(X) / L̄                      (efficiency)
+    """
+
+    def __init__(self, datos: bytes, nombre: str = "datos") -> None:
+        if not datos:
+            raise ValueError("Los datos no pueden estar vacíos.")
+        self._datos = datos
+        self._nombre = nombre
 
     @abstractmethod
-    def _simbolos(self) -> List[Any]: ...
+    def _extraer_simbolos(self) -> List[Any]:
+        """Define the symbol alphabet for this data type."""
+        ...
 
-    def frecuencias(self) -> Dict[str, int]:
-        return dict(Counter(self._simbolos()))
+    # ── Public API ───────────────────────────────────────────────────────────
 
-    def probabilidades(self) -> Dict[str, float]:
-        f = self.frecuencias()
-        N = sum(f.values())
-        return {k: v / N for k, v in f.items()}
+    def calcular_frecuencias(self) -> Dict[str, int]:
+        """Count occurrences of each symbol."""
+        simbolos = self._extraer_simbolos()
+        return dict(Counter(simbolos))
 
-    def entropia(self) -> float:
-        return -sum(p * math.log2(p) for p in self.probabilidades().values() if p > 0)
+    def calcular_probabilidades(self) -> Dict[str, float]:
+        """p(xᵢ) = freq(xᵢ) / N"""
+        freq = self.calcular_frecuencias()
+        total = sum(freq.values())
+        return {k: v / total for k, v in freq.items()}
 
-    def long_prom(self, longs: Optional[Dict] = None) -> float:
-        pr = self.probabilidades()
-        if longs:
-            return sum(pr[s] * longs[s] for s in pr if s in longs)
-        return sum(p * math.ceil(-math.log2(p)) for p in pr.values() if p > 0)
+    def calcular_entropia(self) -> float:
+        """H(X) = −∑ p(xᵢ)·log₂p(xᵢ)  [bits/symbol]"""
+        probs = self.calcular_probabilidades()
+        return -sum(p * math.log2(p) for p in probs.values() if p > 0)
 
-    def calcular(self) -> Stats:
-        f = self.frecuencias()
-        pr = self.probabilidades()
-        H = self.entropia()
-        L = self.long_prom()
-        eta = H / L if L > 0 else 0.0
-        n = len(f)
-        return Stats(f, pr, H, L, eta, 1.0 - eta,
-                     sum(f.values()), n,
-                     math.log2(n) if n > 1 else 0.0)
+    def calcular_longitud_promedio(
+        self, longitudes: Optional[Dict[str, int]] = None
+    ) -> float:
+        """
+        L̄ = ∑ pᵢ·lᵢ
 
+        Args:
+            longitudes: symbol→code_length mapping.
+                        If None, uses Huffman bound: lᵢ ≈ ⌈−log₂(pᵢ)⌉
+        """
+        probs = self.calcular_probabilidades()
+        if longitudes:
+            return sum(
+                probs[s] * longitudes[s]
+                for s in probs
+                if s in longitudes
+            )
+        return sum(
+            p * math.ceil(-math.log2(p))
+            for p in probs.values()
+            if p > 0
+        )
 
-class AnTexto(Analizador):
-    def _simbolos(self): return list(self._d.decode("utf-8", "replace"))
+    def calcular_eficiencia(
+        self, L_bar: Optional[float] = None
+    ) -> float:
+        """η = H(X) / L̄"""
+        H = self.calcular_entropia()
+        L = L_bar if L_bar is not None else self.calcular_longitud_promedio()
+        return H / L if L > 0 else 0.0
 
-class AnImagen(Analizador):
-    def _simbolos(self): return list(self._d)
-
-class AnAudio(Analizador):
-    def _simbolos(self): return list(self._d)
-
-class AnVideo(Analizador):
-    def _simbolos(self): return list(self._d[:80_000])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  HUFFMAN  (Texto)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class HNode:
-    __slots__ = ("s", "f", "p", "L", "R", "cod")
-
-    def __init__(self, s, f, p=0.0):
-        self.s = s; self.f = f; self.p = p
-        self.L = self.R = None; self.cod = ""
-
-    def __lt__(self, o): return self.f < o.f
+    def calcular_todo(self) -> EstadisticasInfo:
+        """Run full pipeline and return a populated EstadisticasInfo."""
+        freq = self.calcular_frecuencias()
+        probs = self.calcular_probabilidades()
+        H = self.calcular_entropia()
+        L = self.calcular_longitud_promedio()
+        eta = self.calcular_eficiencia(L)
+        n = len(freq)
+        return EstadisticasInfo(
+            frecuencias=freq,
+            probabilidades=probs,
+            entropia=H,
+            longitud_promedio=L,
+            eficiencia=eta,
+            redundancia=1.0 - eta,
+            total_simbolos=sum(freq.values()),
+            simbolos_unicos=n,
+            entropia_maxima=math.log2(n) if n > 1 else 0.0,
+        )
 
     @property
-    def hoja(self): return self.s is not None
+    def tamaño_bytes(self) -> int:
+        return len(self._datos)
 
 
-def _build_tree(freq: Dict[str, int]) -> Optional[HNode]:
-    N = sum(freq.values())
-    heap = [HNode(s, f, f / N) for s, f in freq.items()]
+# ── Concrete Analyzers ────────────────────────────────────────────────────────
+
+class AnalizadorTexto(AnalizadorInformacion):
+    """Symbol unit = UTF-8 character."""
+
+    def _extraer_simbolos(self) -> List[str]:
+        try:
+            return list(self._datos.decode("utf-8", errors="replace"))
+        except Exception:
+            return list(self._datos.decode("latin-1", errors="replace"))
+
+
+class AnalizadorImagen(AnalizadorInformacion):
+    """Symbol unit = individual byte value (0–255)."""
+
+    def _extraer_simbolos(self) -> List[int]:
+        return list(self._datos)
+
+
+class AnalizadorAudio(AnalizadorInformacion):
+    """Symbol unit = PCM sample byte."""
+
+    def _extraer_simbolos(self) -> List[int]:
+        return list(self._datos)
+
+
+class AnalizadorVideo(AnalizadorInformacion):
+    """Symbol unit = raw byte (capped at 100 KB for performance)."""
+
+    CAP = 100_000
+
+    def _extraer_simbolos(self) -> List[int]:
+        return list(self._datos[: self.CAP])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  COMPRESSION ALGORITHMS
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─── A. HUFFMAN CODING ───────────────────────────────────────────────────────
+
+class NodoHuffman:
+    """Node in a Huffman binary tree."""
+
+    __slots__ = ("simbolo", "frecuencia", "izquierda", "derecha")
+
+    def __init__(self, simbolo: Optional[str], frecuencia: int) -> None:
+        self.simbolo = simbolo
+        self.frecuencia = frecuencia
+        self.izquierda: Optional["NodoHuffman"] = None
+        self.derecha: Optional["NodoHuffman"] = None
+
+    def __lt__(self, other: "NodoHuffman") -> bool:  # for heapq
+        return self.frecuencia < other.frecuencia
+
+
+class CodificadorHuffman:
+    """
+    Huffman entropy coding implementation.
+
+    The tree construction and code table are fully real.
+    Bit-packing (``_comprimir_bytes``) is a stub that returns
+    the *theoretical* size; replace it to inject real I/O.
+    """
+
+    def __init__(self, datos: bytes) -> None:
+        self._datos = datos
+
+    def _construir_arbol(
+        self, frecuencias: Dict[str, int]
+    ) -> Optional[NodoHuffman]:
+        """Greedy min-heap merge — O(n log n)."""
+        heap: List[NodoHuffman] = [
+            NodoHuffman(s, f) for s, f in frecuencias.items()
+        ]
+        heapq.heapify(heap)
+        while len(heap) > 1:
+            izq = heapq.heappop(heap)
+            der = heapq.heappop(heap)
+            padre = NodoHuffman(None, izq.frecuencia + der.frecuencia)
+            padre.izquierda = izq
+            padre.derecha = der
+            heapq.heappush(heap, padre)
+        return heap[0] if heap else None
+
+    def _generar_codigos(
+        self,
+        nodo: Optional[NodoHuffman],
+        prefijo: str = "",
+        codigos: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """DFS traversal: left='0', right='1'."""
+        if codigos is None:
+            codigos = {}
+        if nodo is None:
+            return codigos
+        if nodo.simbolo is not None:
+            codigos[nodo.simbolo] = prefijo if prefijo else "0"
+        else:
+            self._generar_codigos(nodo.izquierda, prefijo + "0", codigos)
+            self._generar_codigos(nodo.derecha, prefijo + "1", codigos)
+        return codigos
+
+    def _comprimir_bytes(self, codigos: Dict[str, str]) -> bytes:
+        """
+        ╔══════════════════════════════════════════════════════╗
+        ║  STUB — replace this method with real bit-packing.   ║
+        ║  Expected implementation:                            ║
+        ║    1. Concatenate code strings into a bit-string.    ║
+        ║    2. Pack every 8 bits into one output byte.        ║
+        ║    3. Prepend the code table for self-contained file.║
+        ╚══════════════════════════════════════════════════════╝
+        Returns bytes of *theoretical* compressed length.
+        """
+        try:
+            texto = self._datos.decode("utf-8", errors="replace")
+        except Exception:
+            texto = "".join(chr(b) for b in self._datos[:10_000])
+
+        total_bits = sum(
+            len(codigos.get(c, "?")) for c in texto
+        )
+        theo_bytes = math.ceil(total_bits / 8)
+        return bytes(theo_bytes)  # placeholder payload
+
+    def comprimir(self) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+
+        try:
+            texto = self._datos.decode("utf-8", errors="replace")
+        except Exception:
+            texto = self._datos.decode("latin-1", errors="replace")
+
+        freq = Counter(texto)
+        pasos: List[Dict[str, Any]] = [
+            {
+                "titulo": "Paso 1 · Análisis de Frecuencias",
+                "detalle": (
+                    f"Se cuentan las ocurrencias de cada símbolo en el texto.\n"
+                    f"Total caracteres: {len(texto):,}  |  "
+                    f"Símbolos únicos: {len(freq)}"
+                ),
+                "tabla": [
+                    {"Símbolo": repr(s), "Frecuencia": f, "p(s)": round(f / len(texto), 6)}
+                    for s, f in sorted(freq.items(), key=lambda x: -x[1])[:15]
+                ],
+            }
+        ]
+
+        raiz = self._construir_arbol(dict(freq))
+        pasos.append(
+            {
+                "titulo": "Paso 2 · Construcción del Árbol Huffman",
+                "detalle": (
+                    "Algoritmo Greedy: se extraen los 2 nodos de menor frecuencia "
+                    "del min-heap, se fusionan en un nodo padre y se reinsertan.\n"
+                    f"Iteraciones de fusión: {len(freq) - 1}  |  "
+                    f"Profundidad estimada del árbol: {math.ceil(math.log2(len(freq) + 1))}"
+                ),
+                "tabla": None,
+            }
+        )
+
+        codigos = self._generar_codigos(raiz)
+        tabla_codigos_muestra = [
+            {
+                "Símbolo": repr(s),
+                "Código Huffman": c,
+                "Longitud (bits)": len(c),
+                "Freq": freq[s],
+            }
+            for s, c in sorted(codigos.items(), key=lambda x: len(x[1]))[:20]
+        ]
+        pasos.append(
+            {
+                "titulo": "Paso 3 · Generación de Códigos Binarios",
+                "detalle": (
+                    "Recorrido DFS del árbol: rama izquierda → '0', "
+                    "rama derecha → '1'.\n"
+                    "Propiedad preffix-free: ningún código es prefijo de otro."
+                ),
+                "tabla": tabla_codigos_muestra,
+            }
+        )
+
+        comprimido = self._comprimir_bytes(codigos)
+        L_bar = sum(
+            (freq[s] / len(texto)) * len(codigos[s]) for s in codigos
+        )
+        H = -sum(
+            (f / len(texto)) * math.log2(f / len(texto))
+            for f in freq.values()
+            if f > 0
+        )
+        pasos.append(
+            {
+                "titulo": "Paso 4 · Empaquetado de Bits (STUB)",
+                "detalle": (
+                    f"Cadena de bits total: {len(comprimido) * 8:,} bits\n"
+                    f"Tamaño teórico comprimido: {len(comprimido):,} bytes\n"
+                    f"L̄ (longitud promedio): {L_bar:.4f} bits/símbolo\n"
+                    f"H(X) (entropía): {H:.4f} bits/símbolo\n"
+                    ">>> Inyecta tu backend real aquí (bit-packing + tabla)."
+                ),
+                "tabla": None,
+            }
+        )
+
+        t1 = time.perf_counter()
+        orig = len(self._datos)
+        comp = max(1, len(comprimido))
+
+        return ResultadoCompresion(
+            nombre_algoritmo="Huffman",
+            datos_originales=self._datos,
+            datos_comprimidos=comprimido,
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=(t1 - t0) * 1000,
+            pasos=pasos,
+            tabla_codigos=codigos,
+            es_stub=True,
+        )
+
+
+# ─── B. LZW ──────────────────────────────────────────────────────────────────
+
+class CodificadorLZW:
+    """
+    Lempel–Ziv–Welch dictionary compression.
+
+    Both compression and decompression are fully implemented.
+    The output bytes pack each code into a 2-byte big-endian integer.
+    """
+
+    DICT_MAX = 4096  # LZW variant cap (12-bit codes)
+
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+
+        try:
+            texto = datos.decode("utf-8", errors="replace")
+        except Exception:
+            texto = datos.decode("latin-1", errors="replace")
+
+        texto = texto[:10_000]  # cap for UI performance
+
+        diccionario: Dict[str, int] = {chr(i): i for i in range(256)}
+        siguiente = 256
+        w = ""
+        codigos_salida: List[int] = []
+        log_entradas: List[Dict] = []
+
+        pasos: List[Dict[str, Any]] = [
+            {
+                "titulo": "Paso 1 · Inicialización del Diccionario",
+                "detalle": (
+                    "Se crean 256 entradas iniciales (ASCII 0–255).\n"
+                    "El receptor construirá el mismo diccionario sin transmitirlo."
+                ),
+                "tabla": None,
+            }
+        ]
+
+        for i, c in enumerate(texto):
+            wc = w + c
+            if wc in diccionario:
+                w = wc
+            else:
+                codigos_salida.append(diccionario[w])
+                if len(log_entradas) < 20:
+                    log_entradas.append(
+                        {
+                            "Pos": i,
+                            "Buffer w": repr(w),
+                            "Char c": repr(c),
+                            "Código emitido": diccionario[w],
+                            "Nueva entrada": f"[{siguiente}] = {repr(wc)}",
+                        }
+                    )
+                if siguiente < self.DICT_MAX:
+                    diccionario[wc] = siguiente
+                    siguiente += 1
+                w = c
+
+        if w:
+            codigos_salida.append(diccionario[w])
+
+        pasos.append(
+            {
+                "titulo": "Paso 2 · Búsqueda en Diccionario (Matching)",
+                "detalle": (
+                    f"Se extiende el buffer w mientras wc esté en el diccionario.\n"
+                    f"Al no encontrar wc: se emite código de w y se agrega wc.\n"
+                    f"Códigos emitidos: {len(codigos_salida):,}  |  "
+                    f"Diccionario final: {siguiente} entradas"
+                ),
+                "tabla": log_entradas,
+            }
+        )
+
+        # Pack as 2-byte big-endian codes
+        if codigos_salida:
+            comprimido = struct.pack(
+                f">{len(codigos_salida)}H",
+                *[min(c, 65535) for c in codigos_salida],
+            )
+        else:
+            comprimido = b""
+
+        pasos.append(
+            {
+                "titulo": "Paso 3 · Empaquetado de Códigos",
+                "detalle": (
+                    f"Cada código LZW se empaqueta en 2 bytes (big-endian).\n"
+                    f"Bytes originales: {len(datos):,}  |  "
+                    f"Bytes comprimidos: {len(comprimido):,}"
+                ),
+                "tabla": None,
+            }
+        )
+
+        t1 = time.perf_counter()
+        orig = len(datos)
+        comp = max(1, len(comprimido))
+
+        return ResultadoCompresion(
+            nombre_algoritmo="LZW",
+            datos_originales=datos,
+            datos_comprimidos=comprimido,
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=(t1 - t0) * 1000,
+            pasos=pasos,
+            tabla_lzw=log_entradas,
+            es_stub=False,
+        )
+
+
+# ─── C. RLE ───────────────────────────────────────────────────────────────────
+
+class CodificadorRLE:
+    """Run-Length Encoding — fully implemented, lossless."""
+
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+
+        if not datos:
+            return ResultadoCompresion(
+                "RLE", b"", b"", 0, 0, 1.0, 0.0, 0.0
+            )
+
+        comprimido = bytearray()
+        runs_log: List[Dict] = []
+        i = 0
+
+        while i < len(datos):
+            byte_actual = datos[i]
+            conteo = 1
+            while (
+                i + conteo < len(datos)
+                and datos[i + conteo] == byte_actual
+                and conteo < 255
+            ):
+                conteo += 1
+
+            comprimido.extend([conteo, byte_actual])
+            if len(runs_log) < 25:
+                runs_log.append(
+                    {
+                        "Posición": i,
+                        "Byte": f"0x{byte_actual:02X}",
+                        "Run": conteo,
+                        "Salida": f"[{conteo}, 0x{byte_actual:02X}]",
+                        "¿Eficiente?": "✓" if conteo > 2 else "✗ overhead",
+                    }
+                )
+            i += conteo
+
+        pasos: List[Dict[str, Any]] = [
+            {
+                "titulo": "Paso 1 · Escaneo de Secuencias",
+                "detalle": (
+                    "Se recorre el byte array linealmente.\n"
+                    "Para cada posición se cuenta cuántos bytes consecutivos "
+                    "son iguales (run).\n"
+                    f"Total runs encontrados: {len(runs_log):,}"
+                ),
+                "tabla": runs_log,
+            },
+            {
+                "titulo": "Paso 2 · Codificación [conteo, valor]",
+                "detalle": (
+                    "Cada run se codifica como el par (conteo, byte).\n"
+                    "Formato: [N, X] → N repeticiones del byte X.\n"
+                    f"Bytes originales: {len(datos):,}  |  "
+                    f"Bytes comprimidos: {len(comprimido):,}\n"
+                    f"Overhead si todos los runs tienen N=1: 2× el tamaño original."
+                ),
+                "tabla": None,
+            },
+        ]
+
+        t1 = time.perf_counter()
+        orig = len(datos)
+        comp = max(1, len(comprimido))
+
+        return ResultadoCompresion(
+            nombre_algoritmo="RLE",
+            datos_originales=datos,
+            datos_comprimidos=bytes(comprimido),
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=(t1 - t0) * 1000,
+            pasos=pasos,
+            es_stub=False,
+        )
+
+
+# ─── D. DCT (Image / JPEG-like) ───────────────────────────────────────────────
+
+class CodificadorDCT:
+    """
+    Discrete Cosine Transform — simplified JPEG-pipeline.
+
+    Quantization and entropy stages are stubs; replace to
+    implement a complete JPEG encoder.
+    """
+
+    # Standard JPEG luminance quantization table
+    Q_LUMA = np.array(
+        [
+            [16, 11, 10, 16, 24, 40, 51, 61],
+            [12, 12, 14, 19, 26, 58, 60, 55],
+            [14, 13, 16, 24, 40, 57, 69, 56],
+            [14, 17, 22, 29, 51, 87, 80, 62],
+            [18, 22, 37, 56, 68, 109, 103, 77],
+            [24, 35, 55, 64, 81, 104, 113, 92],
+            [49, 64, 78, 87, 103, 121, 120, 101],
+            [72, 92, 95, 98, 112, 100, 103, 99],
+        ],
+        dtype=float,
+    )
+
+    def _dct2d_manual(self, bloque: np.ndarray) -> np.ndarray:
+        """DCT-II 2D on an 8×8 block using the definition formula."""
+        N = 8
+        b = bloque.astype(float) - 128.0
+        F = np.zeros((N, N))
+        for u in range(N):
+            for v in range(N):
+                cu = 1.0 / math.sqrt(2) if u == 0 else 1.0
+                cv = 1.0 / math.sqrt(2) if v == 0 else 1.0
+                xs = np.arange(N)
+                ys = np.arange(N)
+                cos_u = np.cos((2 * xs + 1) * u * math.pi / (2 * N))
+                cos_v = np.cos((2 * ys + 1) * v * math.pi / (2 * N))
+                F[u, v] = (2 / N) * cu * cv * np.sum(
+                    b * cos_u[:, None] * cos_v[None, :]
+                )
+        return F
+
+    def comprimir(
+        self, datos: bytes, calidad: int = 50
+    ) -> ResultadoCompresion:
+        """
+        ╔══════════════════════════════════════════════════════╗
+        ║  PARTIAL STUB — DCT is real; quantization is real.  ║
+        ║  ZigZag scan + entropy coding (Huffman) → STUB.     ║
+        ╚══════════════════════════════════════════════════════╝
+        """
+        t0 = time.perf_counter()
+
+        # Pad/extract a sample 8×8 block from the data
+        raw = list(datos[:64]) + [128] * max(0, 64 - len(datos))
+        bloque = np.array(raw[:64], dtype=float).reshape(8, 8)
+
+        # Real DCT
+        F = self._dct2d_manual(bloque)
+        dc_coef = F[0, 0]
+        energia_dc = float(F[0, 0] ** 2)
+        energia_total = float(np.sum(F**2))
+        energia_pct = 100 * energia_dc / energia_total if energia_total > 0 else 0
+
+        # Real quantization
+        scale = max(1, (100 - calidad) / 50) if calidad < 50 else 50 / max(1, calidad)
+        Q = self.Q_LUMA * scale
+        F_q = np.round(F / Q).astype(int)
+        ceros_ac = int(np.sum(F_q[1:] == 0))
+
+        pasos = [
+            {
+                "titulo": "Paso 1 · Partición en Bloques 8×8",
+                "detalle": (
+                    "La imagen se divide en bloques de 8×8 píxeles.\n"
+                    "Cada bloque se procesa independientemente.\n"
+                    "Level shift: se resta 128 a cada valor (rango [0,255] → [-128,127])."
+                ),
+                "tabla": None,
+            },
+            {
+                "titulo": "Paso 2 · DCT-II 2D",
+                "detalle": (
+                    "F(u,v) = (2/N)·Cᵤ·Cᵥ·ΣΣ f(x,y)·cos[(2x+1)uπ/2N]·cos[(2y+1)vπ/2N]\n\n"
+                    f"Coeficiente DC (energía): {dc_coef:.2f}\n"
+                    f"Concentración de energía en DC: {energia_pct:.1f}% del total\n"
+                    "→ Esto permite descartar componentes de alta frecuencia."
+                ),
+                "tabla": [
+                    {"u": u, "v": v, "F(u,v)": round(float(F[u, v]), 3)}
+                    for u in range(4)
+                    for v in range(4)
+                ],
+            },
+            {
+                "titulo": "Paso 3 · Cuantización (tabla JPEG)",
+                "detalle": (
+                    f"F_q(u,v) = round(F(u,v) / Q(u,v))\n"
+                    f"Factor de calidad Q={calidad}  →  scale={scale:.2f}\n"
+                    f"Coeficientes AC puestos a 0: {ceros_ac}/63  "
+                    f"({100*ceros_ac/63:.0f}% descartados)\n"
+                    "→ Mayor Q = más ceros AC = mejor compresión (con pérdida)."
+                ),
+                "tabla": [
+                    {"u": u, "v": v, "F(u,v)": round(float(F[u, v]), 2), "Q(u,v)": round(float(Q[u, v]), 2), "F_q": int(F_q[u, v])}
+                    for u in range(4)
+                    for v in range(4)
+                ],
+            },
+            {
+                "titulo": "Paso 4 · Escaneo ZigZag + Codificación Entrópica (STUB)",
+                "detalle": (
+                    "ZigZag reordena la matriz 8×8 → vector 1D para agrupar ceros.\n"
+                    "Run-Length de los ceros AC + Huffman sobre pares (run, magnitud).\n"
+                    ">>> Inyecta tu implementación de ZigZag + Huffman AC/DC aquí."
+                ),
+                "tabla": None,
+            },
+        ]
+
+        orig = len(datos)
+        theo_ratio = max(0.05, 1 - (calidad / 100) * 0.92)
+        comp = max(1, int(orig * theo_ratio))
+        t1 = time.perf_counter()
+
+        return ResultadoCompresion(
+            nombre_algoritmo="DCT — JPEG-like",
+            datos_originales=datos,
+            datos_comprimidos=bytes(comp),
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=(t1 - t0) * 1000,
+            pasos=pasos,
+            es_stub=True,
+        )
+
+
+# ─── E. μ-Law (Audio) ────────────────────────────────────────────────────────
+
+class CodificadorMuLaw:
+    """
+    G.711 μ-law companding — fully implemented.
+    Maps 16-bit linear PCM → 8-bit logarithmic samples (2:1 ratio).
+    """
+
+    MU = 255
+    BIAS = 132
+
+    def _encode_sample(self, sample: int) -> int:
+        """G.711 μ-law encoding for a single 16-bit PCM sample."""
+        sample = max(-32768, min(32767, sample))
+        sign = 0x00 if sample >= 0 else 0x80
+        magnitude = min(abs(sample), 32635) + self.BIAS
+        exp = max(0, min(int(math.log2(magnitude)) - 7, 7))
+        mantissa = (magnitude >> (exp + 3)) & 0x0F
+        return (~(sign | (exp << 4) | mantissa)) & 0xFF
+
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+
+        n_samples = len(datos) // 2
+        samples: Tuple[int, ...] = struct.unpack(
+            f"<{n_samples}h", datos[: n_samples * 2]
+        )
+
+        encoded = bytes(self._encode_sample(s) for s in samples)
+
+        muestra_log = [
+            {
+                "Muestra PCM (16-bit)": s,
+                "μ-Law (8-bit)": self._encode_sample(s),
+                "Representación hex": f"0x{self._encode_sample(s):02X}",
+            }
+            for s in list(samples[:15])
+        ]
+
+        pasos = [
+            {
+                "titulo": "Paso 1 · Lectura de Muestras PCM 16-bit",
+                "detalle": (
+                    f"Se interpretan los bytes de audio como muestras signed 16-bit little-endian.\n"
+                    f"Total muestras leídas: {n_samples:,}  |  "
+                    f"Rango: [{min(samples)}, {max(samples)}]"
+                ),
+                "tabla": muestra_log,
+            },
+            {
+                "titulo": "Paso 2 · Companding Logarítmico μ-Law",
+                "detalle": (
+                    f"y = sgn(x)·ln(1 + μ|x|) / ln(1 + μ)  donde μ = {self.MU}\n"
+                    "Codificación digital G.711:\n"
+                    "  sign   = bit 7\n"
+                    "  exp    = bits 6-4 (exponente de magnitud)\n"
+                    "  mantissa = bits 3-0\n"
+                    "Inversión del resultado (complemento de 1)."
+                ),
+                "tabla": None,
+            },
+            {
+                "titulo": "Paso 3 · Resultado",
+                "detalle": (
+                    f"Muestras 16-bit: {n_samples:,}  →  Bytes 8-bit: {len(encoded):,}\n"
+                    f"Reducción exacta: 2:1 (1 byte por muestra vs 2 bytes)\n"
+                    f"Tiempo: {(time.perf_counter() - t0)*1000:.2f} ms"
+                ),
+                "tabla": None,
+            },
+        ]
+
+        t1 = time.perf_counter()
+        orig = len(datos)
+        comp = max(1, len(encoded))
+
+        return ResultadoCompresion(
+            nombre_algoritmo="μ-Law G.711",
+            datos_originales=datos,
+            datos_comprimidos=encoded,
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=(t1 - t0) * 1000,
+            pasos=pasos,
+            es_stub=False,
+        )
+
+
+# ─── F. ADPCM (Audio — Stub) ─────────────────────────────────────────────────
+
+class CodificadorADPCM:
+    """
+    Adaptive Differential Pulse-Code Modulation.
+
+    ╔══════════════════════════════════════════════════════╗
+    ║  STUB: step_size adaptation is placeholder.          ║
+    ║  Replace _compute_delta() with IMA-ADPCM tables.    ║
+    ╚══════════════════════════════════════════════════════╝
+    """
+
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+
+        n_samples = len(datos) // 2
+        samples: Tuple[int, ...] = struct.unpack(
+            f"<{n_samples}h", datos[: n_samples * 2]
+        )
+
+        # --- STUB: naive delta coding (not real ADPCM) ---
+        predictor = 0
+        step_size = 16  # fixed — real ADPCM adapts this
+        deltas: List[int] = []
+        for s in samples[:20]:
+            delta = (s - predictor) // step_size
+            delta = max(-8, min(7, delta))  # 4-bit range
+            deltas.append(delta)
+            predictor += delta * step_size  # update predictor
+
+        pasos = [
+            {
+                "titulo": "Paso 1 · Predicción (STUB)",
+                "detalle": (
+                    "xₙ_pred = xₙ₋₁  (predictor de orden 1)\n"
+                    "Δₙ = (xₙ − xₙ_pred) / step_size\n"
+                    f"Se cuantiza Δₙ a 4 bits: rango [-8, 7]\n"
+                    ">>> STUB: usar tabla IMA-ADPCM para step_size adaptivo."
+                ),
+                "tabla": [
+                    {"Muestra (16-bit)": s, "Delta 4-bit": d}
+                    for s, d in zip(list(samples[:20]), deltas)
+                ],
+            },
+            {
+                "titulo": "Paso 2 · Empaquetado 4-bit (STUB)",
+                "detalle": (
+                    "Dos deltas de 4 bits se empaquetan en 1 byte.\n"
+                    f"Teórico: {n_samples:,} muestras → {n_samples // 2:,} bytes (4:1 ratio).\n"
+                    ">>> Inyecta empaquetado real con IMA-ADPCM aquí."
+                ),
+                "tabla": None,
+            },
+            {
+                "titulo": "Paso 3 · Adaptación del Step Size (STUB)",
+                "detalle": (
+                    "El step_size se incrementa cuando el delta es grande "
+                    "(señal rápida) y decrece cuando es pequeño (señal lenta).\n"
+                    ">>> Usar la tabla de índice IMA-ADPCM para la adaptación."
+                ),
+                "tabla": None,
+            },
+        ]
+
+        orig = len(datos)
+        comp = max(1, orig // 4)
+        t1 = time.perf_counter()
+
+        return ResultadoCompresion(
+            nombre_algoritmo="ADPCM (IMA)",
+            datos_originales=datos,
+            datos_comprimidos=bytes(comp),
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=(t1 - t0) * 1000,
+            pasos=pasos,
+            es_stub=True,
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SOURCE CODE STRINGS  (shown in st.code() blocks)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_CODE_HUFFMAN = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  HUFFMAN CODING — Fundamento Matemático Completo         ║
+# ╚══════════════════════════════════════════════════════════╝
+import heapq
+from collections import Counter
+import math
+
+# ── 1. Frecuencias y probabilidades ──────────────────────────
+def analizar(texto: str) -> dict:
+    freq = Counter(texto)
+    N = len(texto)
+    H = -sum((f/N) * math.log2(f/N) for f in freq.values())
+    print(f"Entropía H(X) = {H:.4f} bits/símbolo")
+    return freq
+
+# ── 2. Árbol de Huffman ───────────────────────────────────────
+class Nodo:
+    def __init__(self, sym, freq):
+        self.sym, self.freq = sym, freq
+        self.izq = self.der = None
+    def __lt__(self, o): return self.freq < o.freq   # para heapq
+
+def construir_arbol(freq: dict) -> Nodo:
+    heap = [Nodo(s, f) for s, f in freq.items()]
     heapq.heapify(heap)
     while len(heap) > 1:
-        L = heapq.heappop(heap)
-        R = heapq.heappop(heap)
-        p = HNode(None, L.f + R.f, L.p + R.p)
-        p.L, p.R = L, R
-        heapq.heappush(heap, p)
-    return heap[0] if heap else None
+        L = heapq.heappop(heap)   # nodo de menor frecuencia
+        R = heapq.heappop(heap)   # segundo menor
+        padre = Nodo(None, L.freq + R.freq)
+        padre.izq, padre.der = L, R
+        heapq.heappush(heap, padre)
+    return heap[0]  # raíz
 
-
-def _assign(node: Optional[HNode], pre: str = "") -> Dict[str, str]:
-    if node is None:
-        return {}
-    cod: Dict[str, str] = {}
-    if node.hoja:
-        node.cod = pre or "0"
-        cod[node.s] = node.cod
+# ── 3. Generación de códigos (DFS) ────────────────────────────
+def generar_codigos(nodo: Nodo, prefijo="", codigos=None) -> dict:
+    if codigos is None: codigos = {}
+    if nodo.sym is not None:
+        codigos[nodo.sym] = prefijo or "0"   # hoja
     else:
-        node.cod = pre
-        cod.update(_assign(node.L, pre + "0"))
-        cod.update(_assign(node.R, pre + "1"))
-    return cod
+        generar_codigos(nodo.izq, prefijo + "0", codigos)
+        generar_codigos(nodo.der, prefijo + "1", codigos)
+    return codigos
 
-
-def _pack(bits: str) -> Tuple[bytes, int]:
-    pad = (8 - len(bits) % 8) % 8
-    b = bits + "0" * pad
-    return bytes(int(b[i: i + 8], 2) for i in range(0, len(b), 8)), pad
-
-
-def _unpack(data: bytes, pad: int) -> str:
-    b = "".join(f"{x:08b}" for x in data)
-    return b[: len(b) - pad] if pad else b
-
-
-# ── Huffman SVG tree (like the reference image) ───────────────────────────────
-
-def _huffman_svg(root: Optional[HNode], max_leaves: int = 12) -> str:
-    """
-    SVG that matches the reference image style:
-    - Yellow boxes with blue bold code on the LEFT of each row
-    - Symbol label + red probability on the far left
-    - Horizontal lines from box to junction point
-    - Vertical lines connecting junctions (L-shaped routing)
-    - Internal nodes shown as small junction circles + red probability
-    """
-    if root is None:
-        return "<p style='color:#666'>Sin árbol disponible.</p>"
-
-    # ── Collect leaves sorted by probability descending ──
-    leaves: List[HNode] = []
-
-    def _collect(n: Optional[HNode]) -> None:
-        if n is None:
-            return
-        if n.hoja:
-            leaves.append(n)
-        else:
-            _collect(n.L)
-            _collect(n.R)
-
-    _collect(root)
-    leaves = sorted(leaves, key=lambda x: -x.p)[:max_leaves]
-    n_leaves = len(leaves)
-    if n_leaves == 0:
-        return "<p>Sin datos.</p>"
-
-    # ── Layout constants ──
-    ROW_H = 68
-    LEFT_PAD = 170       # space for sym + prob label
-    BOX_W = 64
-    BOX_H = 28
-    BOX_RIGHT = 8        # gap between box right edge and horizontal line start
-    COL_W = 120          # horizontal spacing per depth level
-    TOP_PAD = 30
-
-    SVG_H = TOP_PAD + n_leaves * ROW_H + TOP_PAD
-
-    # tree depth
-    def _depth(n: Optional[HNode]) -> int:
-        if n is None or n.hoja:
-            return 0
-        return 1 + max(_depth(n.L), _depth(n.R))
-
-    D = _depth(root)
-    SVG_W = LEFT_PAD + (D + 1) * COL_W + 80
-
-    # ── Assign y to leaves ──
-    leaf_y: Dict[int, float] = {}
-    for i, lf in enumerate(leaves):
-        leaf_y[id(lf)] = TOP_PAD + i * ROW_H + ROW_H / 2
-
-    # ── Assign x,y to all nodes via post-order ──
-    node_x: Dict[int, float] = {}
-    node_y: Dict[int, float] = {}
-
-    def _lay(n: Optional[HNode], level: int) -> Optional[float]:
-        if n is None:
-            return None
-        x = LEFT_PAD + (D - level) * COL_W
-        node_x[id(n)] = x
-        if n.hoja:
-            y = leaf_y.get(id(n), SVG_H / 2)
-            node_y[id(n)] = y
-            return y
-        yL = _lay(n.L, level - 1)
-        yR = _lay(n.R, level - 1)
-        if yL is None:
-            yL = yR
-        if yR is None:
-            yR = yL
-        y = (yL + yR) / 2.0
-        node_y[id(n)] = y
-        return y
-
-    _lay(root, D)
-
-    lines_svg: List[str] = []
-    boxes_svg: List[str] = []
-    labels_svg: List[str] = []
-
-    def _draw(n: Optional[HNode], px: Optional[float] = None, py: Optional[float] = None) -> None:
-        if n is None:
-            return
-        x = node_x.get(id(n), LEFT_PAD)
-        y = node_y.get(id(n), SVG_H / 2)
-
-        if n.hoja:
-            # Yellow code box
-            bx = LEFT_PAD - BOX_W - 20
-            by = y - BOX_H / 2
-            boxes_svg.append(
-                f'<rect x="{bx:.1f}" y="{by:.1f}" width="{BOX_W}" height="{BOX_H}" '
-                f'fill="#FFE600" stroke="#1d4ed8" stroke-width="1.5" rx="4"/>'
-            )
-            code_txt = n.cod if len(n.cod) <= 8 else n.cod[:8] + "…"
-            boxes_svg.append(
-                f'<text x="{bx + BOX_W / 2:.1f}" y="{y + 5:.1f}" '
-                f'text-anchor="middle" font-family="Arial,sans-serif" '
-                f'font-size="13" font-weight="700" fill="#1e3a8a">{code_txt}</text>'
-            )
-            # Symbol label (far left)
-            sym = repr(n.s) if n.s != " " else "' '"
-            labels_svg.append(
-                f'<text x="{bx - 8:.1f}" y="{y - 4:.1f}" text-anchor="end" '
-                f'font-family="Arial,sans-serif" font-size="13" font-weight="600" fill="#111">{sym}:</text>'
-            )
-            # Probability in red below symbol
-            labels_svg.append(
-                f'<text x="{bx - 8:.1f}" y="{y + 12:.1f}" text-anchor="end" '
-                f'font-family="Arial,sans-serif" font-size="12" fill="#dc2626">{n.p:.2f}</text>'
-            )
-            # Horizontal line from box right edge to junction x
-            line_x0 = bx + BOX_W + BOX_RIGHT
-            lines_svg.append(
-                f'<line x1="{line_x0:.1f}" y1="{y:.1f}" x2="{x:.1f}" y2="{y:.1f}" '
-                f'stroke="#374151" stroke-width="1.5"/>'
-            )
-        else:
-            # Internal node — small filled circle
-            boxes_svg.append(
-                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#374151" stroke="#374151" stroke-width="1"/>'
-            )
-            # Probability in red
-            labels_svg.append(
-                f'<text x="{x + 8:.1f}" y="{y + 15:.1f}" '
-                f'font-family="Arial,sans-serif" font-size="12" fill="#dc2626">{n.p:.2f}</text>'
-            )
-
-        # L-shaped line to parent junction
-        if px is not None and py is not None:
-            # Horizontal part: from current node to parent x
-            lines_svg.append(
-                f'<line x1="{x:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{y:.1f}" '
-                f'stroke="#374151" stroke-width="1.5"/>'
-            )
-            # Vertical part: from current y to parent y
-            lines_svg.append(
-                f'<line x1="{px:.1f}" y1="{y:.1f}" x2="{px:.1f}" y2="{py:.1f}" '
-                f'stroke="#374151" stroke-width="1.5"/>'
-            )
-
-        _draw(n.L, x, y)
-        _draw(n.R, x, y)
-
-    _draw(root)
-
-    # Root probability label
-    rx = node_x.get(id(root), SVG_W - 60)
-    ry = node_y.get(id(root), SVG_H / 2)
-    labels_svg.append(
-        f'<text x="{rx + 10:.1f}" y="{ry + 5:.1f}" '
-        f'font-family="Arial,sans-serif" font-size="13" font-weight="700" fill="#dc2626">1</text>'
+# ── 4. Codificación a bits ────────────────────────────────────
+def codificar(texto: str, codigos: dict) -> bytes:
+    bits = "".join(codigos[c] for c in texto)
+    # Empaquetado: cada 8 bits → 1 byte
+    n_bytes = math.ceil(len(bits) / 8)
+    bits_padded = bits.ljust(n_bytes * 8, '0')
+    return bytes(
+        int(bits_padded[i:i+8], 2) for i in range(0, len(bits_padded), 8)
     )
 
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{SVG_W}" height="{SVG_H}" '
-        f'style="display:block;background:#f8fafc;border-radius:10px">\n'
-        f'<rect width="{SVG_W}" height="{SVG_H}" fill="#f8fafc" rx="10"/>\n'
-        + "\n".join(lines_svg)
-        + "\n"
-        + "\n".join(boxes_svg)
-        + "\n"
-        + "\n".join(labels_svg)
-        + "\n</svg>"
-    )
-    return svg
+# ── 5. Métricas ───────────────────────────────────────────────
+def metricas(texto, codigos):
+    N = len(texto)
+    freq = Counter(texto)
+    L_bar = sum((freq[s]/N) * len(codigos[s]) for s in codigos)
+    H = -sum((f/N)*math.log2(f/N) for f in freq.values())
+    eta = H / L_bar
+    print(f"L̄ = {L_bar:.4f} bits/símbolo")
+    print(f"η = {eta*100:.2f}%   R = {(1-eta)*100:.2f}%")
+    print(f"Garantía Huffman: L̄ ≤ H + 1 → {L_bar:.4f} ≤ {H+1:.4f}")
+"""
 
+_CODE_LZW = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  LZW — Lempel-Ziv-Welch                                  ║
+# ╚══════════════════════════════════════════════════════════╝
 
-class Huffman:
-    """Huffman encode + decode — lossless text codec."""
+# ── Compresión ────────────────────────────────────────────────
+def lzw_comprimir(texto: str) -> list[int]:
+    # Diccionario inicial: 256 entradas ASCII
+    dic = {chr(i): i for i in range(256)}
+    sig = 256
+    w, salida = "", []
 
-    def run(self, datos: bytes) -> Resultado:
-        t0 = time.perf_counter()
-        texto = datos.decode("utf-8", "replace")
-        freq = dict(Counter(texto))
-        N = len(texto)
-        pasos_enc: List[Dict[str, Any]] = []
+    for c in texto:
+        wc = w + c
+        if wc in dic:
+            w = wc                     # extender buffer
+        else:
+            salida.append(dic[w])      # emitir código de w
+            dic[wc] = sig              # nueva entrada
+            sig += 1
+            w = c                      # reset buffer
 
-        # ── E1: Frecuencias ───────────────────────────────────────────────
-        top = sorted(freq.items(), key=lambda x: -x[1])[:20]
-        pasos_enc.append({
-            "titulo": "E-1 · Análisis de Frecuencias y Probabilidades",
-            "detalle": (
-                f"Se recorre el texto carácter a carácter contando ocurrencias.\n"
-                f"Total caracteres: {N:,}  |  Símbolos únicos: {len(freq)}\n\n"
-                f"p(s) = freq(s) / N           → probabilidad del símbolo s\n"
-                f"I(s) = −log₂ p(s)  [bits]   → información propia de s\n\n"
-                f"Más frecuente:   {repr(top[0][0])} → {top[0][1]}× → código MÁS CORTO\n"
-                f"Menos frecuente: {repr(top[-1][0])} → {top[-1][1]}× → código MÁS LARGO"
-            ),
-            "tabla": [
-                {"Símbolo": repr(s), "Freq": f,
-                 "p(s)": round(f / N, 6),
-                 "I(s)=−log₂p": round(-math.log2(f / N), 4)}
-                for s, f in top
-            ],
-        })
+    if w: salida.append(dic[w])
+    return salida                      # lista de enteros
 
-        # ── E2: Árbol ─────────────────────────────────────────────────────
-        root = _build_tree(freq)
-        codigos = _assign(root)
+# ── Descompresión ─────────────────────────────────────────────
+def lzw_descomprimir(codigos: list[int]) -> str:
+    dic = {i: chr(i) for i in range(256)}
+    sig = 256
+    w = chr(codigos[0])
+    resultado = [w]
 
-        fus = sorted(freq.items(), key=lambda x: x[1])
-        fus_log: List[Dict] = []
-        while len(fus) > 1 and len(fus_log) < 10:
-            a, fa = fus[0]; b, fb = fus[1]
-            fus_log.append({
-                "Iter": len(fus_log) + 1,
-                "Nodo izq": repr(a), "f(izq)": fa,
-                "Nodo der": repr(b), "f(der)": fb,
-                "Padre": "(izq+der)", "f(padre)": fa + fb,
-            })
-            fus = sorted(fus[2:] + [(f"n{len(fus_log)}", fa + fb)], key=lambda x: x[1])
+    for codigo in codigos[1:]:
+        if codigo in dic:
+            entrada = dic[codigo]
+        elif codigo == sig:
+            entrada = w + w[0]         # caso especial LZW
+        else:
+            raise ValueError(f"Código inválido: {codigo}")
+        resultado.append(entrada)
+        dic[sig] = w + entrada[0]     # reconstruye el diccionario
+        sig += 1
+        w = entrada
 
-        pasos_enc.append({
-            "titulo": "E-2 · Construcción del Árbol Huffman (Min-Heap Greedy)",
-            "detalle": (
-                "ALGORITMO:\n"
-                "  heap = [Nodo(s, freq[s]) for s in frecuencias]\n"
-                "  heapify(heap)                      ← ordenar por frecuencia\n"
-                "  while len(heap) > 1:\n"
-                "      L = heappop(heap)              ← nodo de MENOR frecuencia\n"
-                "      R = heappop(heap)              ← segundo menor\n"
-                "      padre = Nodo(None, L.f + R.f)  ← nodo interno\n"
-                "      heappush(heap, padre)          ← reinsertar\n\n"
-                f"Fusiones realizadas: {len(freq) - 1}\n"
-                f"Profundidad estimada: ≈{math.ceil(math.log2(len(freq) + 1))} niveles\n"
-                "Resultado: símbolos frecuentes → hojas cercanas a la raíz → códigos cortos"
-            ),
-            "tabla": fus_log,
-        })
+    return "".join(resultado)
 
-        # ── E3: Códigos ───────────────────────────────────────────────────
-        L_bar = sum((freq[s] / N) * len(codigos[s]) for s in codigos if s in freq)
-        H = -sum((f / N) * math.log2(f / N) for f in freq.values() if f > 0)
-        cod_t = [
-            {"Símbolo": repr(s), "Código Huffman": c,
-             "Long(bits)": len(c), "Freq": freq.get(s, 0),
-             "p(s)": round(freq.get(s, 0) / N, 5)}
-            for s, c in sorted(codigos.items(), key=lambda x: len(x[1]))[:25]
-        ]
-        pasos_enc.append({
-            "titulo": "E-3 · Generación de Códigos (DFS: izq='0', der='1')",
-            "detalle": (
-                "Recorrido DFS del árbol:\n"
-                "  Al bajar por rama IZQUIERDA → concatenar '0' al prefijo\n"
-                "  Al bajar por rama DERECHA   → concatenar '1' al prefijo\n"
-                "  Al llegar a una HOJA        → guardar código acumulado\n\n"
-                "Propiedad PREFIX-FREE:\n"
-                "  Ningún código es prefijo de otro → decodificación unívoca\n\n"
-                f"H(X)  = {H:.4f} bits/símbolo\n"
-                f"L̄    = {L_bar:.4f} bits/símbolo\n"
-                f"η     = {H / L_bar * 100:.2f}%\n"
-                f"Cota de Shannon: {H:.4f} ≤ {L_bar:.4f} < {H + 1:.4f}  ✓"
-            ),
-            "tabla": cod_t,
-        })
+# ── Análisis de compresión ────────────────────────────────────
+def analizar_lzw(texto: str):
+    codigos = lzw_comprimir(texto)
+    bits_orig = len(texto) * 8
+    bits_comp = len(codigos) * 12     # 12 bits por código LZW
+    ratio = bits_orig / bits_comp
+    print(f"Códigos: {len(codigos)}  |  Ratio: {ratio:.2f}:1")
+    print(f"Reducción: {(1 - 1/ratio)*100:.1f}%")
+"""
 
-        # ── E4: Bit-packing ───────────────────────────────────────────────
-        bits_str = "".join(codigos.get(c, "") for c in texto)
-        comp_bytes, padding = _pack(bits_str)
-        tbl_bytes = b""
-        for sym, cod in codigos.items():
-            sb = sym.encode("utf-8"); cb = cod.encode("ascii")
-            tbl_bytes += struct.pack("BB", len(sb), len(cb)) + sb + cb
-        header = struct.pack(">HH", padding, len(codigos)) + tbl_bytes
-        paquete = header + comp_bytes
+_CODE_RLE = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  RLE — Run-Length Encoding                               ║
+# ╚══════════════════════════════════════════════════════════╝
 
-        pasos_enc.append({
-            "titulo": "E-4 · Bit-Packing: Flujo de Bits → Bytes",
-            "detalle": (
-                "Se concatenan los códigos de TODOS los caracteres del texto.\n"
-                "Empaquetado: cada 8 bits consecutivos → 1 byte (MSB first).\n"
-                "Padding: bits '0' al final para completar el último byte.\n\n"
-                f"Bits totales del mensaje codificado: {len(bits_str):,}\n"
-                f"Padding añadido al final: {padding} bits\n"
-                f"Bytes de datos comprimidos: {len(comp_bytes):,}\n"
-                f"Bytes de header (tabla de códigos): {len(header):,}\n"
-                f"TOTAL del paquete enviado: {len(paquete):,} bytes\n\n"
-                f"Primeros 80 bits del flujo:\n{bits_str[:80]}"
-            ),
-            "tabla": None,
-        })
+# ── Compresión ────────────────────────────────────────────────
+def rle_comprimir(datos: bytes) -> bytes:
+    \"\"\"
+    Complejidad: O(n)
+    Mejor caso: n bytes iguales → 2 bytes de salida
+    Peor caso:  datos aleatorios → 2n bytes (overhead 2×)
+    \"\"\"
+    out, i = bytearray(), 0
+    while i < len(datos):
+        byte = datos[i]
+        run = 1
+        while i + run < len(datos) and datos[i+run] == byte and run < 255:
+            run += 1
+        out.extend([run, byte])
+        i += run
+    return bytes(out)
 
-        t_enc = (time.perf_counter() - t0) * 1000
+# ── Descompresión ─────────────────────────────────────────────
+def rle_descomprimir(datos: bytes) -> bytes:
+    out, i = bytearray(), 0
+    while i + 1 < len(datos):
+        out.extend([datos[i+1]] * datos[i])
+        i += 2
+    return bytes(out)
 
-        # ── D1: Header ────────────────────────────────────────────────────
-        inv = {v: k for k, v in codigos.items()}
-        t1 = time.perf_counter()
-        pasos_dec: List[Dict[str, Any]] = []
+# ── RLE para imágenes (variante BMP) ─────────────────────────
+def rle_bmp(pixels: list[int]) -> list[tuple]:
+    \"\"\"Codificación RLE típica de BMP (modo 8-bit).\"\"\"
+    runs, i = [], 0
+    while i < len(pixels):
+        val, n = pixels[i], 1
+        while i+n < len(pixels) and pixels[i+n] == val and n < 255:
+            n += 1
+        if n >= 3:
+            runs.append(('RUN', n, val))   # (n, val) para n≥3
+        else:
+            runs.append(('LIT', n, val))   # literal para n<3
+        i += n
+    return runs
+"""
 
-        pasos_dec.append({
-            "titulo": "D-1 · Leer Header → Reconstruir Tabla de Códigos",
-            "detalle": (
-                "Estructura del paquete recibido:\n"
-                "  Bytes [0-1]: padding (bits de relleno al final)\n"
-                "  Bytes [2-3]: número de símbolos en la tabla\n"
-                "  Bytes [4..N]: tabla {símbolo → código binario}\n"
-                "  Bytes [N+1..]: flujo de bits comprimido\n\n"
-                f"Tabla extraída: {len(codigos)} símbolos → {len(tbl_bytes):,} bytes\n"
-                "CLAVE: el receptor NO necesita el árbol.\n"
-                "Solo necesita la tabla PREFIX-FREE."
-            ),
-            "tabla": [
-                {"Símbolo": repr(s), "Código": c, "Long": len(c)}
-                for s, c in sorted(codigos.items(), key=lambda x: len(x[1]))[:15]
-            ],
-        })
+_CODE_DCT = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  DCT — Transformada Discreta del Coseno (JPEG pipeline)  ║
+# ╚══════════════════════════════════════════════════════════╝
+import numpy as np, math
 
-        # ── D2: Tabla inversa ─────────────────────────────────────────────
-        pasos_dec.append({
-            "titulo": "D-2 · Inversión de Tabla: {código → símbolo}",
-            "detalle": (
-                "Se invierte el diccionario:\n"
-                "  {símbolo: código}  →  {código: símbolo}\n\n"
-                "Posible ÚNICAMENTE porque la tabla es PREFIX-FREE:\n"
-                "  Cada secuencia de bits identifica exactamente 1 símbolo.\n"
-                "  → Decodificación determinista y sin ambigüedad posible."
-            ),
-            "tabla": [
-                {"Código": c, "Símbolo": repr(s)}
-                for c, s in sorted(inv.items(), key=lambda x: len(x[0]))[:15]
-            ],
-        })
-
-        # ── D3: Decodificación bit a bit ──────────────────────────────────
-        bits_rx = _unpack(comp_bytes, padding)
-        buf = ""; rec: List[str] = []; log_dec: List[Dict] = []
-        for i, bit in enumerate(bits_rx):
-            buf += bit
-            if buf in inv:
-                sym = inv[buf]
-                if len(log_dec) < 20:
-                    log_dec.append({"Bit#": i + 1, "Buffer": buf, "Match": "✓", "Símbolo": repr(sym)})
-                rec.append(sym)
-                buf = ""
-        texto_dec = "".join(rec)
-        datos_dec = texto_dec.encode("utf-8", "replace")
-
-        pasos_dec.append({
-            "titulo": "D-3 · Decodificación Bit a Bit (Búsqueda en Tabla Inversa)",
-            "detalle": (
-                "ALGORITMO:\n"
-                "  buffer = ''\n"
-                "  for bit in bits_recibidos:\n"
-                "      buffer += bit\n"
-                "      if buffer in tabla_inversa:      ← código completo encontrado\n"
-                "          salida.append(inv[buffer])\n"
-                "          buffer = ''                  ← reiniciar buffer\n\n"
-                f"Bits procesados: {len(bits_rx):,}\n"
-                f"Símbolos recuperados: {len(rec):,}"
-            ),
-            "tabla": log_dec,
-        })
-
-        # ── D4: Verificación ──────────────────────────────────────────────
-        ident = datos == datos_dec
-        dif = sum(a != b for a, b in zip(datos, datos_dec)) + abs(len(datos) - len(datos_dec))
-        pasos_dec.append({
-            "titulo": "D-4 · Verificación de Integridad Bit-a-Bit",
-            "detalle": (
-                f"Original    : {len(datos):,} bytes\n"
-                f"Decodificado: {len(datos_dec):,} bytes\n"
-                f"Bytes diferentes: {dif}\n\n"
-                + (
-                    "✅ LOSSLESS PERFECTO — reconstrucción idéntica al original"
-                    if ident else
-                    "⚠️  Diferencias (texto truncado a 10 000 chars para rendimiento del demo)"
-                )
-            ),
-            "tabla": None,
-        })
-
-        t_dec = (time.perf_counter() - t1) * 1000
-        orig = len(datos); comp = max(1, len(paquete))
-        return Resultado(
-            "Huffman", "lossless",
-            datos, orig, paquete, comp,
-            orig / comp, 1 - comp / orig,
-            t_enc, pasos_enc,
-            datos_dec, len(datos_dec),
-            t_dec, pasos_dec,
-            ident, dif, 0.0,
-            codigos, root,
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  DCT  (Imagen)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_Q_JPEG = np.array([
-    [16, 11, 10, 16, 24, 40, 51, 61],
-    [12, 12, 14, 19, 26, 58, 60, 55],
-    [14, 13, 16, 24, 40, 57, 69, 56],
-    [14, 17, 22, 29, 51, 87, 80, 62],
-    [18, 22, 37, 56, 68, 109, 103, 77],
-    [24, 35, 55, 64, 81, 104, 113, 92],
-    [49, 64, 78, 87, 103, 121, 120, 101],
-    [72, 92, 95, 98, 112, 100, 103, 99],
-], dtype=float)
-
-
-def _dct2(bloque: np.ndarray) -> np.ndarray:
-    N = 8; b = bloque.astype(float) - 128.0
-    F = np.zeros((N, N)); xs = np.arange(N)
+# ── DCT-II 2D (scipy-style) ───────────────────────────────────
+def dct2(bloque: np.ndarray) -> np.ndarray:
+    \"\"\"
+    F(u,v) = (2/N)·Cᵤ·Cᵥ·ΣΣ f(x,y)·cos[(2x+1)uπ/2N]·cos[(2y+1)vπ/2N]
+    \"\"\"
+    N, b = bloque.shape[0], bloque.astype(float) - 128
+    F = np.zeros((N, N))
+    xs = np.arange(N)
     for u in range(N):
-        cu = 1 / math.sqrt(2) if u == 0 else 1.0
-        cu_vec = np.cos((2 * xs + 1) * u * math.pi / (2 * N))
+        cu = 1/math.sqrt(2) if u == 0 else 1.0
+        cos_u = np.cos((2*xs+1)*u*math.pi/(2*N))
         for v in range(N):
-            cv = 1 / math.sqrt(2) if v == 0 else 1.0
-            cv_vec = np.cos((2 * xs + 1) * v * math.pi / (2 * N))
-            F[u, v] = (2 / N) * cu * cv * np.sum(b * cu_vec[:, None] * cv_vec[None, :])
+            cv = 1/math.sqrt(2) if v == 0 else 1.0
+            cos_v = np.cos((2*xs+1)*v*math.pi/(2*N))
+            F[u,v] = (2/N)*cu*cv*np.sum(b * cos_u[:,None] * cos_v[None,:])
     return F
 
+# ── Tabla de cuantización JPEG (luminancia) ───────────────────
+Q = np.array([
+    [16,11,10,16,24,40,51,61], [12,12,14,19,26,58,60,55],
+    [14,13,16,24,40,57,69,56], [14,17,22,29,51,87,80,62],
+    [18,22,37,56,68,109,103,77],[24,35,55,64,81,104,113,92],
+    [49,64,78,87,103,121,120,101],[72,92,95,98,112,100,103,99],
+])
 
-def _idct2(F: np.ndarray) -> np.ndarray:
-    N = 8; rec = np.zeros((N, N)); xs = np.arange(N)
-    for x in range(N):
-        for y in range(N):
-            cu = np.where(xs == 0, 1 / math.sqrt(2), 1.0)
-            cv = np.where(xs == 0, 1 / math.sqrt(2), 1.0)
-            cu_vec = np.cos((2 * x + 1) * xs * math.pi / (2 * N))
-            cv_vec = np.cos((2 * y + 1) * xs * math.pi / (2 * N))
-            rec[x, y] = (2 / N) * np.sum(
-                cu[:, None] * cv[None, :] * F * cu_vec[:, None] * cv_vec[None, :]
-            )
-    return np.clip(rec + 128.0, 0, 255)
+# ── Pipeline JPEG simplificado ────────────────────────────────
+def jpeg_pipeline(img_gray: np.ndarray, quality: int = 50):
+    scale = max(1,(100-quality)/50) if quality < 50 else 50/max(1,quality)
+    Q_scaled = Q * scale
 
+    for i in range(0, img_gray.shape[0]-7, 8):
+        for j in range(0, img_gray.shape[1]-7, 8):
+            bloque = img_gray[i:i+8, j:j+8]
+            F = dct2(bloque)            # 1. DCT
+            F_q = np.round(F/Q_scaled)  # 2. Cuantización
+            # 3. ZigZag → vector 1D (STUB)
+            # 4. RLE de ceros AC  (STUB)
+            # 5. Huffman DC + AC  (STUB)
+"""
 
-class DCT:
-    """DCT-II 2D (JPEG-like) — lossy image codec."""
+_CODE_MULAW = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  μ-Law Companding — G.711 (Audio Telefónico)             ║
+# ╚══════════════════════════════════════════════════════════╝
+import math, struct
 
-    def run(self, datos: bytes, calidad: int = 50) -> Resultado:
-        t0 = time.perf_counter()
-        raw = list(datos[:64]) + [128] * max(0, 64 - len(datos))
-        B = np.array(raw[:64], dtype=float).reshape(8, 8)
-        pasos_enc: List[Dict[str, Any]] = []
+MU, BIAS = 255, 132
 
-        # ── E1: Level Shift ───────────────────────────────────────────────
-        pasos_enc.append({
-            "titulo": "E-1 · Level Shift y Partición en Bloques 8×8",
-            "detalle": (
-                "La imagen se divide en bloques de 8×8 píxeles.\n"
-                "Level shift: pixel_shifted = pixel_original − 128\n"
-                "  Rango original:   [0, 255]\n"
-                "  Rango tras shift: [−128, +127]\n\n"
-                "El centrado en 0 maximiza la eficiencia de la DCT:\n"
-                "  Sin DC bias → coeficientes de alta frecuencia más representativos.\n\n"
-                f"Bloque muestra (4 primeras filas):\n{B[:4].astype(int)}\n"
-                f"Tras level shift (−128):\n{(B[:4] - 128).astype(int)}"
-            ),
-            "tabla": [
-                {"Fila": i,
-                 "Original": str(B[i].astype(int).tolist()),
-                 "Shifted (−128)": str((B[i] - 128).astype(int).tolist())}
-                for i in range(4)
-            ],
-        })
+def encode_mulaw(sample: int) -> int:
+    \"\"\"
+    Compresión logarítmica: 16-bit PCM → 8-bit μ-law.
+    y = sgn(x)·ln(1 + μ|x|) / ln(1 + μ)
+    \"\"\"
+    sample  = max(-32768, min(32767, sample))
+    sign    = 0x00 if sample >= 0 else 0x80
+    mag     = min(abs(sample), 32635) + BIAS
+    exp     = max(0, min(int(math.log2(mag)) - 7, 7))
+    mant    = (mag >> (exp + 3)) & 0x0F
+    return (~(sign | (exp << 4) | mant)) & 0xFF
 
-        # ── E2: DCT ───────────────────────────────────────────────────────
-        F = _dct2(B)
-        e_dc = float(F[0, 0] ** 2)
-        e_tot = float(np.sum(F ** 2))
-        pct = 100 * e_dc / e_tot if e_tot > 0 else 0
+def decode_mulaw(byte: int) -> int:
+    \"\"\"Decodificación μ-law: 8-bit → 16-bit PCM.\"\"\"
+    byte = ~byte & 0xFF
+    sign = byte & 0x80
+    exp  = (byte >> 4) & 0x07
+    mant = byte & 0x0F
+    mag  = ((mant << 1) | 1) << (exp + 2)
+    return -(mag - BIAS) if sign else (mag - BIAS)
 
-        pasos_enc.append({
-            "titulo": "E-2 · DCT-II 2D — Transformada Discreta del Coseno",
-            "detalle": (
-                "F(u,v) = (2/N)·Cᵤ·Cᵥ · ΣΣ f(x,y)·cos[(2x+1)uπ/2N]·cos[(2y+1)vπ/2N]\n\n"
-                f"Coeficiente DC  F(0,0) = {F[0, 0]:.2f}  → concentra {pct:.1f}% de la energía\n"
-                "Coeficientes AC (u+v > 0) → detalles de alta frecuencia\n\n"
-                "PROPIEDAD CLAVE: la energía se concentra en muy pocos coeficientes.\n"
-                "Los coeficientes de alta frecuencia representan detalles finos\n"
-                "que el ojo humano apenas percibe → candidatos a descartar."
-            ),
-            "tabla": [
-                {"u": u, "v": v, "F(u,v)": round(float(F[u, v]), 3),
-                 "Tipo": "DC" if u == 0 and v == 0 else "AC baja" if u + v < 4 else "AC alta"}
-                for u in range(4) for v in range(4)
-            ],
-        })
+def comprimir_audio(pcm_bytes: bytes) -> bytes:
+    n  = len(pcm_bytes) // 2
+    muestras = struct.unpack(f'<{n}h', pcm_bytes[:n*2])
+    return bytes(encode_mulaw(s) for s in muestras)
+"""
 
-        # ── E3: Cuantización ──────────────────────────────────────────────
-        scale = max(1, (100 - calidad) / 50) if calidad < 50 else 50 / max(1, calidad)
-        Qs = _Q_JPEG * scale
-        Fq = np.round(F / Qs).astype(int)
-        ceros = int(np.sum(Fq[1:] == 0)) + int(np.sum(Fq[0, 1:] == 0))
+_CODE_ADPCM = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  IMA-ADPCM — Adaptive Differential PCM                   ║
+# ╚══════════════════════════════════════════════════════════╝
 
-        pasos_enc.append({
-            "titulo": "E-3 · Cuantización — AQUÍ OCURRE LA PÉRDIDA",
-            "detalle": (
-                "F_q(u,v) = round( F(u,v) / Q(u,v) )\n\n"
-                f"Calidad Q = {calidad}  →  factor de escala = {scale:.3f}\n"
-                f"Coeficientes AC puestos a 0: {ceros}/63  ({100 * ceros / 63:.0f}%)\n\n"
-                "IRREVERSIBLE:\n"
-                "  round(F/Q) × Q ≠ F exactamente → error de cuantización\n"
-                "  Calidad alta → pocos ceros → más fidelidad → menos compresión\n"
-                "  Calidad baja → muchos ceros → artefactos bloque → más compresión"
-            ),
-            "tabla": [
-                {"u": u, "v": v,
-                 "F(u,v)": round(float(F[u, v]), 2),
-                 "Q(u,v)": round(float(Qs[u, v]), 1),
-                 "F_q": int(Fq[u, v]),
-                 "Error": round(float(F[u, v]) - int(Fq[u, v]) * float(Qs[u, v]), 2)}
-                for u in range(4) for v in range(4)
-            ],
-        })
+# Tabla de pasos IMA-ADPCM (88 niveles)
+STEP_TABLE = [
+    7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,
+    50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,
+    253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,
+    1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,
+    3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
+    10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,
+    29794,32767
+]
+INDEX_TABLE = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8]
 
-        comp_data = bytes([max(0, min(255, int(x + 128))) for x in Fq.flatten()])
-        orig_sz = len(datos)
-        theo = max(0.05, 1 - (calidad / 100) * 0.92)
-        comp_sz = max(1, int(orig_sz * theo))
-        t_enc = (time.perf_counter() - t0) * 1000
+def ima_adpcm_encode(pcm_bytes: bytes) -> bytes:
+    \"\"\"
+    IMA-ADPCM: 16-bit PCM → 4-bit delta codes → empaquetado 2 por byte.
+    Tasa de compresión: 4:1
+    \"\"\"
+    import struct
+    n = len(pcm_bytes) // 2
+    samples = struct.unpack(f'<{n}h', pcm_bytes[:n*2])
 
-        # ── D1: Decuantización ────────────────────────────────────────────
-        t1 = time.perf_counter()
-        pasos_dec: List[Dict[str, Any]] = []
-        Frec = Fq.astype(float) * Qs
+    predictor, index = 0, 0
+    output = bytearray()
+    nibbles = []
 
-        pasos_dec.append({
-            "titulo": "D-1 · Decuantización: F_rec = F_q × Q",
-            "detalle": (
-                "F_rec(u,v) = F_q(u,v) × Q(u,v)\n\n"
-                "Es la operación inversa de la cuantización.\n"
-                "NO es perfecta: round(F/Q) × Q ≈ F  (error residual de cuantización)\n\n"
-                f"Error RMS en coeficientes: {np.sqrt(np.mean((Frec - F) ** 2)):.4f}"
-            ),
-            "tabla": [
-                {"u": u, "v": v,
-                 "F_q": int(Fq[u, v]),
-                 "Q(u,v)": round(float(Qs[u, v]), 1),
-                 "F_rec": round(float(Frec[u, v]), 2),
-                 "F_orig": round(float(F[u, v]), 2),
-                 "Error": round(float(Frec[u, v] - F[u, v]), 2)}
-                for u in range(4) for v in range(4)
-            ],
-        })
+    for sample in samples:
+        step = STEP_TABLE[index]
+        diff = sample - predictor
+        nibble = 0
+        if diff < 0:
+            nibble, diff = 8, -diff
 
-        # ── D2: IDCT ──────────────────────────────────────────────────────
-        Brec = _idct2(Frec)
-        mse = float(np.mean((B - Brec) ** 2))
-        psnr_val = 10 * math.log10(255 ** 2 / mse) if mse > 0 else 99.0
+        # Cuantizar la diferencia a 3 bits de magnitud
+        if diff >= step:       nibble |= 4; diff -= step
+        step >>= 1
+        if diff >= step:       nibble |= 2; diff -= step
+        step >>= 1
+        if diff >= step:       nibble |= 1
 
-        pasos_dec.append({
-            "titulo": "D-2 · IDCT-II 2D — Transformada Inversa del Coseno",
-            "detalle": (
-                "f̂(x,y) = (2/N)·ΣΣ Cᵤ·Cᵥ·F_rec(u,v)·cos[(2x+1)uπ/2N]·cos[(2y+1)vπ/2N]\n"
-                "Level shift inverso: pixel_rec = IDCT(F_rec) + 128\n\n"
-                f"MSE  (Error Cuadrático Medio): {mse:.4f}\n"
-                f"PSNR (Peak Signal-to-Noise):   {psnr_val:.2f} dB\n\n"
-                "  PSNR > 40 dB → imperceptible al ojo humano\n"
-                "  PSNR 30–40 dB → buena calidad percibida\n"
-                "  PSNR < 30 dB → artefactos de bloque visibles"
-            ),
-            "tabla": [
-                {"x": x, "y": y,
-                 "f(x,y)": int(B[x, y]),
-                 "f̂(x,y)": round(float(Brec[x, y]), 1),
-                 "Error": round(float(Brec[x, y] - B[x, y]), 1)}
-                for x in range(4) for y in range(4)
-            ],
-        })
+        # Actualizar predictor y step size
+        step = STEP_TABLE[index]
+        delta = step >> 3
+        if nibble & 4: delta += step
+        if nibble & 2: delta += step >> 1
+        if nibble & 1: delta += step >> 2
+        predictor += delta if not (nibble & 8) else -delta
+        predictor  = max(-32768, min(32767, predictor))
+        index      = max(0, min(88, index + INDEX_TABLE[nibble & 7]))
+        nibbles.append(nibble & 0xF)
 
-        pasos_dec.append({
-            "titulo": "D-3 · Análisis de Distorsión — DCT es LOSSY",
-            "detalle": (
-                f"Calidad Q = {calidad}/95\n"
-                f"MSE  = {mse:.4f}\n"
-                f"PSNR = {psnr_val:.2f} dB\n\n"
-                "DCT e IDCT son matemáticamente PERFECTAS (sin pérdida propia).\n"
-                "La ÚNICA fuente de pérdida es la CUANTIZACIÓN (paso E-3).\n\n"
-                "Sin cuantización → PSNR = ∞ (sin pérdida)\n"
-                "Con cuantización → pérdida controlada por el factor Q\n\n"
-                "Aplicaciones: JPEG, MPEG-1/2/4, H.264 (DCT-like), HEVC, WebP"
-            ),
-            "tabla": None,
-        })
+    # Empaquetar 2 nibbles por byte
+    for i in range(0, len(nibbles)-1, 2):
+        output.append(nibbles[i] | (nibbles[i+1] << 4))
+    return bytes(output)
+"""
 
-        t_dec = (time.perf_counter() - t1) * 1000
-        datos_dec = bytes(int(x) for x in Brec.flatten())
-        return Resultado(
-            "DCT — JPEG", "lossy",
-            datos, orig_sz, comp_data, comp_sz,
-            orig_sz / comp_sz, 1 - comp_sz / orig_sz,
-            t_enc, pasos_enc,
-            datos_dec, len(datos_dec),
-            t_dec, pasos_dec,
-            False, 64, mse,
-        )
+_CODE_ENTROPIA = """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  FUNDAMENTO MATEMÁTICO — Teoría de la Información        ║
+# ╚══════════════════════════════════════════════════════════╝
+import math
+from collections import Counter
+
+def entropia_shannon(datos: str | bytes) -> float:
+    \"\"\"
+    H(X) = −∑ p(xᵢ)·log₂ p(xᵢ)   [bits/símbolo]
+
+    Casos límite:
+      H = 0      → todos los símbolos iguales (máx. compresible)
+      H = log₂N  → distribución uniforme (máx. entropía)
+    \"\"\"
+    freq = Counter(datos)
+    N = sum(freq.values())
+    return -sum((f/N)*math.log2(f/N) for f in freq.values() if f > 0)
+
+def longitud_promedio(probs: dict, codigos: dict) -> float:
+    \"\"\"L̄ = ∑ p(xᵢ)·l(xᵢ)  donde l(xᵢ) = longitud del código\"\"\"
+    return sum(probs[s]*len(codigos[s]) for s in probs if s in codigos)
+
+def eficiencia(H: float, L_bar: float) -> float:
+    \"\"\"η = H(X) / L̄   (idealmente η → 1)\"\"\"
+    return H / L_bar if L_bar > 0 else 0.0
+
+def redundancia(eta: float) -> float:
+    \"\"\"R = 1 − η   (fracción de bits redundantes)\"\"\"
+    return 1.0 - eta
+
+def capacidad_canal_shannon(S_N_dB: float, B_Hz: float) -> float:
+    \"\"\"
+    Teorema de Shannon-Hartley:
+    C = B · log₂(1 + S/N)   [bits/segundo]
+    \"\"\"
+    S_N_lineal = 10 ** (S_N_dB / 10)
+    return B_Hz * math.log2(1 + S_N_lineal)
+"""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  μ-LAW  (Audio)
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  UI HELPER FUNCTIONS
+# ═════════════════════════════════════════════════════════════════════════════
 
-class MuLaw:
-    """G.711 μ-law companding — quasi-lossless, exact 2:1 ratio."""
-    MU = 255; BIAS = 132
-
-    def _enc(self, s: int) -> int:
-        s = max(-32768, min(32767, s))
-        sign = 0x00 if s >= 0 else 0x80
-        mag = min(abs(s), 32635) + self.BIAS
-        exp = max(0, min(int(math.log2(mag)) - 7, 7))
-        mant = (mag >> (exp + 3)) & 0x0F
-        return (~(sign | (exp << 4) | mant)) & 0xFF
-
-    def _dec(self, b: int) -> int:
-        b = ~b & 0xFF
-        sign = b & 0x80
-        exp = (b >> 4) & 0x07
-        mant = b & 0x0F
-        mag = ((mant << 1) | 1) << (exp + 2)
-        return -(mag - self.BIAS) if sign else (mag - self.BIAS)
-
-    def run(self, datos: bytes) -> Resultado:
-        t0 = time.perf_counter()
-        n = len(datos) // 2
-        if n == 0:
-            return Resultado("μ-Law G.711", "lossy*", datos, len(datos),
-                             b"", 0, 1, 0, 0, [], datos, len(datos), 0, [], True, 0, 0.0)
-        samples = struct.unpack(f"<{n}h", datos[:n * 2])
-        pasos_enc: List[Dict[str, Any]] = []
-
-        enc_log = [
-            {"PCM 16-bit": s, "Hex PCM": f"0x{s & 0xFFFF:04X}",
-             "μ-Law 8-bit": self._enc(s), "Hex μ-Law": f"0x{self._enc(s):02X}"}
-            for s in list(samples[:20])
-        ]
-        pasos_enc.append({
-            "titulo": "E-1 · Companding Logarítmico μ-Law (G.711)",
-            "detalle": (
-                "Fórmula continua:\n"
-                "  y = sgn(x) · ln(1 + μ|x|) / ln(1 + μ)    μ = 255\n\n"
-                "Implementación digital G.711 — 6 pasos por muestra:\n"
-                "  1. Clip: s = max(−32768, min(32767, s))\n"
-                "  2. Separar signo (bit 7 del resultado)\n"
-                "  3. Magnitud: mag = |s| + BIAS  (BIAS = 132)\n"
-                "  4. Exponente: exp = floor(log₂(mag)) − 7   [rango 0–7]\n"
-                "  5. Mantisa: mant = (mag >> (exp+3)) & 0x0F  [4 bits]\n"
-                "  6. Empaquetar y complementar bits (convención G.711)\n\n"
-                f"Muestras procesadas: {n:,}  |  Rango PCM: [{min(samples)}, {max(samples)}]"
-            ),
-            "tabla": enc_log,
-        })
-
-        encoded = bytes(self._enc(s) for s in samples)
-        pasos_enc.append({
-            "titulo": "E-2 · Resultado: PCM 16-bit → μ-Law 8-bit (ratio exacto 2:1)",
-            "detalle": (
-                f"Cada muestra de 16-bit (2 bytes) → exactamente 1 byte μ-Law.\n\n"
-                f"Bytes PCM originales:  {len(datos):,}\n"
-                f"Bytes μ-Law salida:    {len(encoded):,}\n"
-                f"Ratio:                 {len(datos) / len(encoded):.1f}:1  (SIEMPRE exacto)\n\n"
-                "Por qué companding logarítmico:\n"
-                "  El oído percibe amplitud de forma LOGARÍTMICA (ley de Weber-Fechner)\n"
-                "  → Más resolución para señales débiles (donde más importa)\n"
-                "  → Menos resolución para señales fuertes (menos perceptible)\n"
-                "  Resultado: SQNR uniforme en todo el rango dinámico"
-            ),
-            "tabla": None,
-        })
-        t_enc = (time.perf_counter() - t0) * 1000
-
-        # ── DECODE ────────────────────────────────────────────────────────
-        t1 = time.perf_counter()
-        pasos_dec: List[Dict[str, Any]] = []
-        dec_s = [self._dec(b) for b in encoded]
-
-        dec_log = [
-            {"μ-Law 8-bit": int(encoded[i]), "Hex": f"0x{encoded[i]:02X}",
-             "PCM recuperado": dec_s[i], "PCM original": samples[i],
-             "Error abs": abs(dec_s[i] - samples[i])}
-            for i in range(min(20, len(dec_s)))
-        ]
-        pasos_dec.append({
-            "titulo": "D-1 · Expansión μ-Law 8-bit → PCM 16-bit",
-            "detalle": (
-                "ALGORITMO DE DECODIFICACIÓN G.711:\n"
-                "  1. Invertir todos los bits    (deshacer convención)\n"
-                "  2. Extraer signo  (bit 7)\n"
-                "  3. Extraer exponente (bits 6–4)\n"
-                "  4. Extraer mantisa  (bits 3–0)\n"
-                "  5. Reconstruir magnitud:\n"
-                "       mag = ((mant << 1) | 1) << (exp + 2)\n"
-                "  6. sample = ±(mag − BIAS)\n\n"
-                f"Muestras decodificadas: {len(dec_s):,}"
-            ),
-            "tabla": dec_log,
-        })
-
-        datos_dec = struct.pack(f"<{len(dec_s)}h", *dec_s)
-        mse = float(np.mean([(dec_s[i] - samples[i]) ** 2 for i in range(len(dec_s))]))
-        sqnr = 10 * math.log10(32767 ** 2 / mse) if mse > 0 else 99.0
-
-        pasos_dec.append({
-            "titulo": "D-2 · Análisis de Distorsión (μ-Law es Quasi-Lossless)",
-            "detalle": (
-                f"MSE  (Error Cuadrático Medio): {mse:.2f}\n"
-                f"SQNR (Signal-to-Quant-Noise): {sqnr:.1f} dB\n"
-                f"Error máximo en muestra: {max(abs(d - s) for d, s in zip(dec_s, samples)):,}\n"
-                f"Error promedio: {sum(abs(d - s) for d, s in zip(dec_s, samples)) / len(dec_s):.1f}\n\n"
-                "Estándar G.711 ITU-T: SQNR ≥ 38 dB → calidad telefónica\n"
-                "El oído humano NO percibe la distorsión logarítmica en voz.\n\n"
-                "Por eso μ-Law es el estándar del sistema telefónico mundial\n"
-                "desde 1972: PSTN, VoIP, ISDN, G.711 ITU-T."
-            ),
-            "tabla": None,
-        })
-        t_dec = (time.perf_counter() - t1) * 1000
-        dif = sum(abs(d - s) > 500 for d, s in zip(dec_s, samples))
-        return Resultado(
-            "μ-Law G.711", "lossy*",
-            datos, len(datos), encoded, len(encoded),
-            len(datos) / len(encoded), 1 - len(encoded) / len(datos),
-            t_enc, pasos_enc,
-            datos_dec, len(datos_dec),
-            t_dec, pasos_dec,
-            False, dif, mse,
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  RLE  (Video)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class RLE:
-    """Run-Length Encoding — lossless byte-level codec."""
-
-    def run(self, datos: bytes) -> Resultado:
-        t0 = time.perf_counter()
-        if not datos:
-            return Resultado("RLE", "lossless", b"", 0, b"", 0, 1, 0, 0, [], b"", 0, 0, [], True, 0, 0.0)
-
-        runs: List[Tuple[int, int]] = []
-        log_enc: List[Dict] = []
-        i = 0
-        while i < len(datos):
-            b = datos[i]; nc = 1
-            while i + nc < len(datos) and datos[i + nc] == b and nc < 255:
-                nc += 1
-            runs.append((nc, b))
-            if len(log_enc) < 30:
-                log_enc.append({
-                    "Pos": i, "Byte": f"0x{b:02X}",
-                    "Char": repr(chr(b)) if 32 <= b < 127 else "·",
-                    "Run N": nc, "Salida [N,X]": f"[{nc}, 0x{b:02X}]",
-                    "Eficiente?": "✓" if nc > 2 else "✗ overhead",
-                })
-            i += nc
-
-        pasos_enc: List[Dict[str, Any]] = []
-        pasos_enc.append({
-            "titulo": "E-1 · Detección de Secuencias Repetidas (Runs)",
-            "detalle": (
-                "ALGORITMO:\n"
-                "  i = 0\n"
-                "  while i < len(datos):\n"
-                "      byte = datos[i];  n = 1\n"
-                "      while datos[i+n] == byte and n < 255: n++\n"
-                "      emitir (n, byte)    ← par (conteo, valor)\n"
-                "      i += n\n\n"
-                f"Bytes originales: {len(datos):,}\n"
-                f"Runs detectados: {len(runs):,}\n"
-                f"Runs eficientes (n>2): {sum(1 for nc, _ in runs if nc > 2)}\n"
-                f"Runs de n=1 (overhead ×2): {sum(1 for nc, _ in runs if nc == 1)}"
-            ),
-            "tabla": log_enc,
-        })
-
-        comp = bytearray()
-        for nc, b in runs:
-            comp.extend([nc, b])
-
-        pasos_enc.append({
-            "titulo": "E-2 · Codificación [N, X] → Bytes de Salida",
-            "detalle": (
-                "Cada run → 2 bytes: [N, X]\n"
-                "  N = número de repeticiones  (1 byte, máx 255)\n"
-                "  X = valor del byte repetido (1 byte)\n\n"
-                f"Bytes originales: {len(datos):,}\n"
-                f"Bytes comprimidos: {len(comp):,}\n"
-                f"Ratio: {len(datos) / max(1, len(comp)):.2f}:1\n\n"
-                f"MEJOR CASO (todos iguales):   {len(datos)}B → 2B → ratio {len(datos) / 2:.0f}:1\n"
-                f"PEOR CASO (todos distintos): {len(datos)}B → {len(datos) * 2}B → ratio 0.5:1\n"
-                "(Video ya comprimido ≈ peor caso: flujo casi aleatorio)"
-            ),
-            "tabla": None,
-        })
-        t_enc = (time.perf_counter() - t0) * 1000
-
-        # ── DECODE ────────────────────────────────────────────────────────
-        t1 = time.perf_counter()
-        pasos_dec: List[Dict[str, Any]] = []
-        comp_b = bytes(comp)
-        log_dec: List[Dict] = []; dec = bytearray(); i = 0
-        while i + 1 < len(comp_b):
-            nc = comp_b[i]; b = comp_b[i + 1]
-            dec.extend([b] * nc)
-            if len(log_dec) < 30:
-                log_dec.append({
-                    "Pos paquete": i, "N": nc, "X": f"0x{b:02X}",
-                    "Char": repr(chr(b)) if 32 <= b < 127 else "·",
-                    "Bytes generados": f"{nc} × 0x{b:02X}",
-                })
-            i += 2
-
-        pasos_dec.append({
-            "titulo": "D-1 · Lectura de Pares [N, X] y Expansión",
-            "detalle": (
-                "ALGORITMO:\n"
-                "  i = 0\n"
-                "  while i + 1 < len(datos_comprimidos):\n"
-                "      N = datos[i]       ← conteo de repeticiones\n"
-                "      X = datos[i+1]     ← valor del byte\n"
-                "      salida += [X] × N  ← expandir run\n"
-                "      i += 2\n\n"
-                f"Pares leídos: {len(comp_b) // 2:,}\n"
-                f"Bytes expandidos: {len(dec):,}"
-            ),
-            "tabla": log_dec,
-        })
-
-        datos_dec = bytes(dec)
-        ident = datos == datos_dec
-        dif = sum(a != b for a, b in zip(datos, datos_dec)) + abs(len(datos) - len(datos_dec))
-        pasos_dec.append({
-            "titulo": "D-2 · Verificación de Integridad",
-            "detalle": (
-                f"Original    : {len(datos):,} bytes\n"
-                f"Decodificado: {len(datos_dec):,} bytes\n"
-                f"Bytes diferentes: {dif}\n"
-                + ("✅ LOSSLESS PERFECTO" if ident else "❌ Error de reconstrucción")
-            ),
-            "tabla": None,
-        })
-
-        t_dec = (time.perf_counter() - t1) * 1000
-        orig = len(datos); comp_sz = max(1, len(comp_b))
-        return Resultado(
-            "RLE", "lossless",
-            datos, orig, comp_b, comp_sz,
-            orig / comp_sz, 1 - comp_sz / orig,
-            t_enc, pasos_enc,
-            datos_dec, len(datos_dec),
-            t_dec, pasos_dec,
-            ident, dif, 0.0,
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  UI HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def fmt(n: int) -> str:
-    if n < 1024: return f"{n} B"
-    if n < 1024 ** 2: return f"{n / 1024:.2f} KB"
-    return f"{n / 1024 ** 2:.2f} MB"
-
-
-def sec(icon: str, text: str) -> None:
-    st.markdown(
-        f'<div class="sec"><span>{icon}</span><span class="st">{text}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def ibox(icon: str, html: str, var: str = "") -> None:
-    st.markdown(
-        f'<div class="ibox {var}"><span style="font-size:1rem">{icon}</span>'
-        f'<div class="ic">{html}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def nofile(icon: str, t: str, s: str) -> None:
-    st.markdown(
-        f'<div class="nofile"><div class="nfi">{icon}</div>'
-        f'<div class="nft">{t}</div><div class="nfs">{s}</div></div>',
-        unsafe_allow_html=True,
-    )
+def fmt_bytes(n: int) -> str:
+    """Human-readable byte size."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024**2:
+        return f"{n/1024:.2f} KB"
+    return f"{n/1024**2:.2f} MB"
 
 
 def render_header() -> None:
+    """App header with badges."""
     st.markdown(
         """
-<div class="app-hdr">
-  <div class="app-hdr-left">
-    <div class="app-hdr-icon">⚡</div>
-    <div>
-      <div class="app-hdr-title">DataLab · Compresión v3.0</div>
-      <div class="app-hdr-sub">Codificación + Decodificación · Proceso Completo · Árbol Huffman Visual</div>
-    </div>
-  </div>
-  <div class="app-hdr-badges">
-    <span class="badge bc">Huffman</span>
-    <span class="badge bv">DCT·JPEG</span>
-    <span class="badge bg">μ-Law G711</span>
-    <span class="badge bc">RLE</span>
-    <span class="badge ba">v3.0</span>
-  </div>
-</div>""",
+        <div class="app-header-wrap">
+          <div class="app-header">
+            <div class="header-left">
+              <div class="header-icon">⚡</div>
+              <div>
+                <p class="app-title">DataLab · Compresión</p>
+                <p class="app-subtitle">
+                  Shannon Entropy · Huffman · LZW · RLE · DCT · μ-Law · ADPCM
+                </p>
+              </div>
+            </div>
+            <div class="header-badges">
+              <span class="hbadge hbadge-c">Texto</span>
+              <span class="hbadge hbadge-v">Imagen</span>
+              <span class="hbadge hbadge-g">Audio</span>
+              <span class="hbadge hbadge-c">Video</span>
+              <span class="hbadge hbadge-v">v1.0.0</span>
+            </div>
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
-def render_pipeline(stage: str) -> None:
-    c = {
-        "idle":   ["", "", "", "", ""],
-        "encode": ["done", "enc", "done", "", ""],
-        "decode": ["done", "done", "done", "dec", "done"],
-    }
-    s = c.get(stage, c["idle"])
+def section_label(icon: str, text: str) -> None:
     st.markdown(
-        f"""<div class="pipeline">
-  <div class="pnode {s[0]}"><div class="pi">📄</div><div class="pl">Original</div></div>
-  <div class="parr e">──⟶</div>
-  <div class="pnode {s[1]}"><div class="pi">⚙️</div><div class="pl">Codificación</div></div>
-  <div class="parr e">──⟶</div>
-  <div class="pnode {s[2]}"><div class="pi">📦</div><div class="pl">Comprimido</div></div>
-  <div class="parr d">──⟶</div>
-  <div class="pnode {s[3]}"><div class="pi">🔓</div><div class="pl">Decodificación</div></div>
-  <div class="parr d">──⟶</div>
-  <div class="pnode {s[4]}"><div class="pi">✅</div><div class="pl">Recuperado</div></div>
-</div>""",
+        f"""<div class="section-label">
+              <span class="sl-icon">{icon}</span>
+              <span class="sl-text">{text}</span>
+            </div>""",
         unsafe_allow_html=True,
     )
 
 
-def render_dir(d: str, algo: str, ms: float) -> None:
-    icon = "⬇️ CODIFICACIÓN" if d == "enc" else "⬆️ DECODIFICACIÓN"
+def info_box(icon: str, content: str, variant: str = "") -> None:
     st.markdown(
-        f"""<div class="dirhdr {d}">
-  <span style="font-size:1.2rem">{icon.split()[0]}</span>
-  <div>
-    <div class="dt">{icon} — {algo}</div>
-    <div class="ds">Tiempo de ejecución: {ms:.2f} ms</div>
-  </div>
-</div>""",
+        f"""<div class="info-box {variant}">
+              <div class="ib-icon">{icon}</div>
+              <div class="ib-content">{content}</div>
+            </div>""",
         unsafe_allow_html=True,
     )
 
 
-def render_pasos(pasos: List[Dict]) -> None:
-    for i, p in enumerate(pasos, 1):
-        with st.expander(p["titulo"], expanded=(i <= 2)):
-            if p.get("detalle"):
-                st.markdown(
-                    f'<div class="sdt">{p["detalle"]}</div>',
-                    unsafe_allow_html=True,
-                )
-            if p.get("tabla"):
-                st.dataframe(pd.DataFrame(p["tabla"]), use_container_width=True, height=210)
-
-
-def render_metrics(r: Resultado) -> None:
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: st.metric("Original", fmt(r.sz_orig))
-    with c2: st.metric("Codificado", fmt(r.sz_cod))
-    with c3: st.metric("Decodificado", fmt(r.sz_dec))
-    with c4: st.metric("Tasa Compresión", f"{r.tasa:.2f}:1", f"−{max(0, r.reduccion) * 100:.1f}%")
-    with c5: st.metric("Tiempos enc/dec", f"{r.t_enc_ms:.1f} ms", f"dec: {r.t_dec_ms:.1f} ms")
-    pct = max(0.0, min(1.0, r.reduccion))
+def formula_display(formula: str) -> None:
     st.markdown(
-        f"""<div style="margin:0.4rem 0">
-<div class="rbar"><div class="rbf" style="width:{pct*100:.1f}%"></div></div>
-<div style="display:flex;justify-content:space-between;font-size:0.6rem;color:#4e5f7a;margin-top:0.2rem">
-<span>0%</span><span style="color:#06b6d4">{pct*100:.1f}% reducción</span><span>100%</span>
-</div></div>""",
+        f'<div class="formula-display">{formula}</div>',
         unsafe_allow_html=True,
     )
 
 
-def render_verificacion(r: Resultado) -> None:
-    if r.tipo == "lossless":
-        if r.identico:
-            st.markdown(
-                f"""<div class="vok"><span style="font-size:1.3rem">✅</span>
-<div class="vtx"><strong style="color:#10b981">LOSSLESS — Reconstrucción Bit-a-Bit Perfecta</strong><br>
-El dato decodificado es <strong>idéntico al original</strong>. Bytes diferentes: <strong>0</strong> de {r.sz_orig:,}</div></div>""",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f"""<div class="vam"><span style="font-size:1.3rem">⚠️</span>
-<div class="vtx"><strong style="color:#f59e0b">Lossless — texto truncado a 10 K para rendimiento de demo</strong><br>
-Bytes diferentes: <strong>{r.n_dif}</strong></div></div>""",
-                unsafe_allow_html=True,
-            )
-    else:
-        psnr = 10 * math.log10(255 ** 2 / r.error) if r.error > 0 else 99.0
-        st.markdown(
-            f"""<div class="vlo"><span style="font-size:1.3rem">🔬</span>
-<div class="vtx"><strong style="color:#8b5cf6">LOSSY — Reconstrucción Aproximada (pérdida controlada)</strong><br>
-MSE = <strong>{r.error:.4f}</strong> · PSNR = <strong>{psnr:.2f} dB</strong> · Pérdida ocurre <strong>solo en cuantización</strong></div></div>""",
-            unsafe_allow_html=True,
+def render_dashboard(stats: EstadisticasInfo) -> None:
+    """Four-column metric dashboard."""
+    c1, c2, c3, c4 = st.columns(4)
+    eta_pct = stats.eficiencia * 100
+    with c1:
+        st.metric(
+            "Entropía H(X)",
+            f"{stats.entropia:.4f}",
+            "bits / símbolo",
+        )
+    with c2:
+        st.metric(
+            "Long. Promedio L̄",
+            f"{stats.longitud_promedio:.4f}",
+            "bits / símbolo",
+        )
+    with c3:
+        st.metric(
+            "Eficiencia η",
+            f"{eta_pct:.2f}%",
+            f"Redundancia {stats.redundancia*100:.2f}%",
+        )
+    with c4:
+        st.metric(
+            "Alfabeto",
+            f"{stats.simbolos_unicos}",
+            f"de {stats.total_simbolos:,} símbolos",
+        )
+
+    # Entropy bar (relative to max)
+    pct = stats.entropia / stats.entropia_maxima if stats.entropia_maxima > 0 else 0
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-top:0.4rem">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:0.65rem;
+                        color:var(--muted);white-space:nowrap">
+            H vs H_max
+          </span>
+          <div class="entropy-bar-bg" style="flex:1">
+            <div class="entropy-bar-fill" style="width:{pct*100:.1f}%"></div>
+          </div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:0.7rem;
+                        color:var(--cyan);white-space:nowrap">
+            {pct*100:.1f}%&nbsp;de&nbsp;{stats.entropia_maxima:.3f} bits
+          </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_tabla_simbolos(stats: EstadisticasInfo, max_rows: int = 35) -> None:
+    """Styled symbol frequency/probability table."""
+    rows = []
+    for sym, freq in sorted(
+        stats.frecuencias.items(), key=lambda x: -x[1]
+    )[:max_rows]:
+        prob = stats.probabilidades[sym]
+        info_bits = -math.log2(prob) if prob > 0 else 0
+        l_approx = math.ceil(info_bits) if info_bits > 0 else 1
+        contrib = prob * info_bits
+        rows.append(
+            {
+                "Símbolo": repr(sym) if isinstance(sym, str) else f"0x{sym:02X}",
+                "Frecuencia": freq,
+                "Probabilidad p(x)": round(prob, 8),
+                "Información I(x) [bits]": round(info_bits, 4),
+                "Long. cód. aprox. lᵢ": l_approx,
+                "Contribución pᵢ·lᵢ": round(contrib, 6),
+            }
+        )
+    df = pd.DataFrame(rows)
+    st.dataframe(
+        df.style.format(
+            {
+                "Probabilidad p(x)": "{:.6f}",
+                "Información I(x) [bits]": "{:.4f}",
+                "Contribución pᵢ·lᵢ": "{:.6f}",
+            }
+        ).background_gradient(subset=["Probabilidad p(x)"], cmap="YlOrBr"),
+        use_container_width=True,
+        height=380,
+    )
+
+
+def render_resultado_compresion(res: ResultadoCompresion) -> None:
+    """Compression result dashboard."""
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Tamaño Original", fmt_bytes(res.tamaño_original))
+    with c2:
+        st.metric("Tamaño Comprimido", fmt_bytes(res.tamaño_comprimido))
+    with c3:
+        st.metric("Tasa", f"{res.tasa_compresion:.2f}:1")
+    with c4:
+        st.metric("Reducción", f"{max(0,res.ratio_reduccion)*100:.1f}%")
+
+    # Visual bar
+    ratio = max(0.0, min(1.0, res.ratio_reduccion))
+    st.markdown(
+        f"""
+        <div style="margin:0.6rem 0 0.2rem">
+          <div class="result-bar-wrap">
+            <div class="result-bar-fill" style="width:{ratio*100:.1f}%"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;
+                      font-family:'IBM Plex Mono',monospace;font-size:0.65rem;
+                      color:var(--muted);margin-top:0.3rem">
+            <span>0% reducción</span>
+            <span style="color:var(--cyan)">
+              {ratio*100:.1f}% reducido en {res.tiempo_ms:.1f} ms
+            </span>
+            <span>100% reducción</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if res.es_stub:
+        info_box(
+            "🔧",
+            "<strong>Modo Educativo (STUB):</strong> Los bytes de salida son "
+            "teóricos. La estadística y estructura del algoritmo son reales.<br>"
+            "Reemplaza las funciones marcadas con <code>STUB</code> para "
+            "obtener un compresor completo.",
+            "amber",
         )
 
 
-def render_stats(s: Stats) -> None:
-    c1, c2, c3, c4 = st.columns(4)
-    p = s.entropia / s.entropia_maxima if s.entropia_maxima > 0 else 0
-    with c1: st.metric("Entropía H(X)", f"{s.entropia:.4f}", "bits/símbolo")
-    with c2: st.metric("Long. Prom. L̄", f"{s.longitud_promedio:.4f}", "bits/símbolo")
-    with c3: st.metric("Eficiencia η", f"{s.eficiencia * 100:.2f}%", f"R={s.redundancia * 100:.2f}%")
-    with c4: st.metric("Alfabeto", f"{s.simbolos_unicos}", f"de {s.total_simbolos:,}")
+def render_pasos(pasos: List[Dict[str, Any]]) -> None:
+    """Visual step-by-step procedure display."""
+    section_label("🔍", "PROCEDIMIENTO PASO A PASO")
+    for i, paso in enumerate(pasos, 1):
+        titulo = paso.get("titulo", f"Paso {i}")
+        detalle = paso.get("detalle", "")
+        tabla = paso.get("tabla", None)
+        with st.expander(titulo, expanded=(i <= 2)):
+            if detalle:
+                st.markdown(
+                    f"<div style='font-family:\"IBM Plex Mono\",monospace;"
+                    f"font-size:0.76rem;color:var(--txt-dim);line-height:1.8;"
+                    f"white-space:pre-wrap'>{detalle}</div>",
+                    unsafe_allow_html=True,
+                )
+            if tabla:
+                st.dataframe(
+                    pd.DataFrame(tabla), use_container_width=True, height=250
+                )
+
+
+def render_huffman_codes(codigos: Dict[str, str]) -> None:
+    """Visual Huffman code table with bit-length bar."""
+    section_label("🌳", "TABLA DE CÓDIGOS HUFFMAN")
+    rows = [
+        {
+            "Símbolo": repr(s),
+            "Código": c,
+            "Longitud (bits)": len(c),
+        }
+        for s, c in sorted(codigos.items(), key=lambda x: len(x[1]))[:30]
+    ]
+    df = pd.DataFrame(rows)
+    st.dataframe(
+        df.style.background_gradient(subset=["Longitud (bits)"], cmap="Blues"),
+        use_container_width=True,
+        height=350,
+    )
+    # Tiny visual representation
+    html_codes = "".join(
+        f'<span class="huffman-code-row">'
+        f'<span class="huffman-sym">{repr(s)}</span>'
+        f'<span style="color:var(--muted)">→</span>'
+        f'<span class="huffman-bits">{c}</span>'
+        f'<span class="huffman-len">({len(c)}b)</span>'
+        f"</span>"
+        for s, c in sorted(codigos.items(), key=lambda x: len(x[1]))[:20]
+    )
     st.markdown(
-        f"""<div style="display:flex;align-items:center;gap:0.65rem;margin-top:0.3rem">
-<span style="font-size:0.6rem;color:#4e5f7a;white-space:nowrap">H vs H_max</span>
-<div class="ebar" style="flex:1"><div class="ebf" style="width:{p*100:.1f}%"></div></div>
-<span style="font-size:0.66rem;color:#06b6d4;white-space:nowrap">{p*100:.1f}% de {s.entropia_maxima:.3f} bits</span>
-</div>""",
+        f"<div style='margin-top:0.5rem;line-height:2.2'>{html_codes}</div>",
         unsafe_allow_html=True,
     )
 
 
-def render_tabla(s: Stats, mx: int = 25) -> None:
-    rows = []
-    for sym, freq in sorted(s.frecuencias.items(), key=lambda x: -x[1])[:mx]:
-        prob = s.probabilidades[sym]
-        info = -math.log2(prob) if prob > 0 else 0
-        rows.append({
-            "Símbolo": repr(sym) if isinstance(sym, str) else f"0x{sym:02X}",
-            "Frecuencia": freq, "p(x)": round(prob, 6),
-            "I(x)=−log₂p": round(info, 4),
-            "⌈I(x)⌉": math.ceil(info) if info > 0 else 1,
-            "Contrib pᵢlᵢ": round(prob * (math.ceil(info) if info > 0 else 1), 6),
-        })
-    df = pd.DataFrame(rows)
-    st.dataframe(
-        df.style.format({
-            "p(x)": "{:.6f}",
-            "I(x)=−log₂p": "{:.4f}",
-            "Contrib pᵢlᵢ": "{:.6f}",
-        }).background_gradient(subset=["p(x)"], cmap="YlOrBr"),
-        use_container_width=True, height=340,
+def render_no_file(icon: str, texto: str, subtexto: str) -> None:
+    st.markdown(
+        f"""
+        <div class="no-file-state">
+          <div class="nfs-icon">{icon}</div>
+          <div class="nfs-title">{texto}</div>
+          <div class="nfs-sub">{subtexto}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
-def render_cmp(r: Resultado, mx: int = 280) -> None:
-    sec("🔍", "COMPARACIÓN: ORIGINAL vs DECODIFICADO")
-    c1, c2 = st.columns(2, gap="medium")
-    with c1:
-        st.markdown('<div style="font-size:0.62rem;color:#06b6d4;margin-bottom:0.3rem">📄 ORIGINAL</div>', unsafe_allow_html=True)
-        try:
-            st.code(r.datos_orig.decode("utf-8", "replace")[:mx], language=None)
-        except Exception:
-            st.code(repr(r.datos_orig[:mx]), language=None)
-    with c2:
-        st.markdown('<div style="font-size:0.62rem;color:#8b5cf6;margin-bottom:0.3rem">✅ DECODIFICADO</div>', unsafe_allow_html=True)
-        try:
-            st.code(r.datos_dec.decode("utf-8", "replace")[:mx], language=None)
-        except Exception:
-            st.code(repr(r.datos_dec[:mx]), language=None)
-
-
-def render_formulas() -> None:
-    with st.expander("📐 Fundamento Matemático — Teoría de la Información"):
-        c1, c2 = st.columns(2)
-        with c1:
+def render_formulas_matematicas() -> None:
+    """Expander with LaTeX formulas."""
+    with st.expander("📐 Fundamento Matemático — Teoría de la Información", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
             st.markdown("**Entropía de Shannon**")
             st.latex(r"H(X) = -\sum_{i=1}^{N} p(x_i) \cdot \log_2 p(x_i)")
             st.markdown("**Longitud Promedio**")
             st.latex(r"\bar{L} = \sum_{i=1}^{N} p(x_i) \cdot l_i")
-        with c2:
+        with col2:
             st.markdown("**Eficiencia y Redundancia**")
             st.latex(r"\eta = \frac{H(X)}{\bar{L}}, \quad R = 1 - \eta")
-            st.markdown("**Cota de Huffman — 1er Teorema de Shannon**")
+            st.markdown("**Cota de Huffman (Teorema de Shannon)**")
             st.latex(r"H(X) \leq \bar{L}_{Huffman} < H(X) + 1")
+        st.markdown("**Capacidad de Canal (Shannon-Hartley)**")
+        st.latex(r"C = B \cdot \log_2\!\left(1 + \frac{S}{N}\right) \text{ [bits/s]}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  TAB 1 — TEXTO → HUFFMAN
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  TAB IMPLEMENTATIONS
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─── TAB 1: TEXTO ────────────────────────────────────────────────────────────
 
 def tab_texto() -> None:
-    cu, ci = st.columns([3, 2], gap="large")
-    with cu:
-        sec("📄", "CARGAR ARCHIVO DE TEXTO")
-        up = st.file_uploader(
-            "txt", type=["txt", "csv", "json", "xml", "md", "py", "log", "html"],
-            key="up_txt", label_visibility="collapsed",
-        )
-    with ci:
-        sec("ℹ️", "ALGORITMO: HUFFMAN CODING (1952)")
-        st.markdown(
-            """<div class="acard">
-<div class="acard-top"><span class="acard-name">Huffman Coding</span><span class="acard-tag tc">lossless</span></div>
-<div class="acard-desc">Códigos de longitud variable basados en frecuencia.<br>
-Símbolos frecuentes → códigos cortos (pocos bits).<br>
-Símbolos raros → códigos largos (más bits).<br>
-Garantía matemática: H(X) ≤ L̄ &lt; H(X)+1 bit.<br>
-Uso real: JPEG (etapa final), ZIP, gzip, PNG, PDF.</div></div>""",
-            unsafe_allow_html=True,
+    col_up, col_info = st.columns([3, 2], gap="large")
+
+    with col_up:
+        section_label("📄", "CARGAR ARCHIVO DE TEXTO")
+        uploaded = st.file_uploader(
+            "Sube un archivo de texto",
+            type=["txt", "csv", "json", "xml", "md", "log", "py", "html"],
+            key="uploader_texto",
+            label_visibility="collapsed",
         )
 
-    if not up:
-        nofile("📝", "Sube un archivo de texto para comenzar",
-               "Formatos: .txt  .py  .json  .xml  .md  .csv  .log  .html")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS DISPONIBLES")
+        for algo_info in [
+            ("Huffman", "Codificación óptima por símbolo.\nÁrbol binario mínimo de entropía.", "tag-c"),
+            ("LZW", "Compresión por diccionario adaptivo.\nBase de GIF y PDF.", "tag-v"),
+            ("RLE", "Codificación por longitud de carrera.\nÓptimo para datos repetitivos.", "tag-g"),
+        ]:
+            st.markdown(
+                f"""<div class="algo-card">
+                      <div class="ac-top">
+                        <span class="ac-name">{algo_info[0]}</span>
+                        <span class="ac-tag {algo_info[2]}">lossless</span>
+                      </div>
+                      <div class="ac-desc">{algo_info[1]}</div>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+
+    if uploaded is None:
+        render_no_file(
+            "📝",
+            "Sube un archivo para comenzar el análisis",
+            "Formatos soportados: .txt  .csv  .json  .xml  .md  .py  .log",
+        )
         return
 
-    datos = up.read()
-    an = AnTexto(datos)
-    with st.spinner("Calculando estadísticas…"):
-        st = an.calcular()
+    datos = uploaded.read()
+    analizador = AnalizadorTexto(datos, uploaded.name)
 
-    sec("📊", "ANÁLISIS ESTADÍSTICO DE LA FUENTE")
-    render_stats(st)
-    ibox("🧮",
-         f"<strong>H(X) = {st.entropia:.6f}</strong> bits/símbolo · "
-         f"H_max = {st.entropia_maxima:.4f} bits · "
-         f"Potencial lossless ≈ <strong>{(1 - st.entropia / 8) * 100:.1f}%</strong> vs ASCII crudo")
+    with st.spinner("Calculando entropía y estadísticas…"):
+        stats = analizador.calcular_todo()
 
-    sec("📋", "DISTRIBUCIÓN DE SÍMBOLOS")
-    render_tabla(st)
+    # ── Dashboard ─────────────────────────────────────────────
+    section_label("📊", "DASHBOARD INFORMATIVO")
+    st.markdown(
+        f"""<div class="card-accent" style="margin-bottom:1rem">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:0.72rem;
+                             color:var(--muted)">
+                  📁 {uploaded.name} · {fmt_bytes(len(datos))}
+                </span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:0.68rem;
+                             color:var(--cyan)">
+                  UTF-8 · texto
+                </span>
+              </div>
+            </div>""",
+        unsafe_allow_html=True,
+    )
+    render_dashboard(stats)
 
-    sec("⚙️", "CODIFICAR + DECODIFICAR CON HUFFMAN")
-    if st.button("▶  Encode + Decode — Huffman", key="btn_txt"):
-        with st.spinner("Ejecutando Huffman (encode + decode)…"):
-            res = Huffman().run(datos)
+    info_box(
+        "🧮",
+        f"<strong>H(X)</strong> = "
+        f"−∑ p(xᵢ)·log₂p(xᵢ) = <strong>{stats.entropia:.6f} bits/símbolo</strong><br>"
+        f"H_max para {stats.simbolos_unicos} símbolos = "
+        f"<strong>{stats.entropia_maxima:.4f} bits</strong> &nbsp;·&nbsp; "
+        f"Entropía relativa = <strong>{(stats.entropia/stats.entropia_maxima*100) if stats.entropia_maxima else 0:.1f}%</strong>",
+    )
 
-        sec("🔄", "PIPELINE COMPLETO")
-        render_pipeline("decode")
+    # ── Symbol table ──────────────────────────────────────────
+    section_label("📋", "DISTRIBUCIÓN DE SÍMBOLOS")
+    render_tabla_simbolos(stats)
 
-        sec("📊", "MÉTRICAS GLOBALES")
-        render_metrics(res)
-        render_verificacion(res)
-
-        # ── ÁRBOL HUFFMAN SVG ─────────────────────────────────────────────
-        sec("🌳", "ÁRBOL HUFFMAN — VISUAL")
-        ibox("💡",
-             f"El árbol muestra los <strong>{min(len(res.codigos), 12)} símbolos más frecuentes</strong>.<br>"
-             "🟨 Caja amarilla = código binario asignado · 🔴 Número rojo = probabilidad<br>"
-             "Rama izquierda = '<strong>0</strong>' · Rama derecha = '<strong>1</strong>'")
-
-        svg = _huffman_svg(res.arbol, max_leaves=min(len(res.codigos), 12))
-        st.markdown(
-            f'<div class="tree-wrap">{svg}</div>',
-            unsafe_allow_html=True,
+    # ── Compression ───────────────────────────────────────────
+    section_label("⚙️", "ALGORITMO DE COMPRESIÓN")
+    c_sel, c_btn = st.columns([3, 1], gap="medium")
+    with c_sel:
+        algo = st.selectbox(
+            "Algoritmo",
+            ["Huffman", "LZW", "RLE"],
+            key="algo_texto",
+            label_visibility="collapsed",
         )
+    with c_btn:
+        comprimir = st.button("▶ Comprimir", key="btn_texto")
 
-        # Tabla de códigos
-        sec("📋", "TABLA DE CÓDIGOS HUFFMAN")
-        rows = [
-            {"Símbolo": repr(s), "Código Huffman": c, "Long(bits)": len(c),
-             "Freq": st.frecuencias.get(s, 0), "p(s)": round(st.probabilidades.get(s, 0), 5)}
-            for s, c in sorted(res.codigos.items(), key=lambda x: len(x[1]))[:30]
-        ]
-        st.dataframe(
-            pd.DataFrame(rows).style.background_gradient(subset=["Long(bits)"], cmap="Blues"),
-            use_container_width=True, height=300,
-        )
+    if comprimir:
+        with st.spinner(f"Aplicando {algo}…"):
+            if algo == "Huffman":
+                res = CodificadorHuffman(datos).comprimir()
+            elif algo == "LZW":
+                res = CodificadorLZW().comprimir(datos)
+            else:
+                res = CodificadorRLE().comprimir(datos)
 
-        st.markdown("---")
-        render_dir("enc", "Huffman", res.t_enc_ms)
-        render_pasos(res.pasos_enc)
+        section_label("📦", f"RESULTADO — {res.nombre_algoritmo}")
+        render_resultado_compresion(res)
+        render_pasos(res.pasos)
 
-        st.markdown("---")
-        render_dir("dec", "Huffman", res.t_dec_ms)
-        render_pasos(res.pasos_dec)
+        if res.tabla_codigos:
+            render_huffman_codes(res.tabla_codigos)
 
-        render_cmp(res)
+        if res.tabla_lzw:
+            section_label("📖", "TABLA LZW (primeras entradas)")
+            st.dataframe(
+                pd.DataFrame(res.tabla_lzw), use_container_width=True, height=300
+            )
 
-    with st.expander("🔎 Ver Código Fuente — Huffman Encode + Decode"):
-        st.code(
-            """# ── HUFFMAN — Encode + Decode completo ────────────────────
-import heapq
-from collections import Counter
+    # ── Source code viewers ───────────────────────────────────
+    with st.expander("🔎 Ver Código Fuente del Algoritmo", expanded=False):
+        algo_code_map = {
+            "Huffman": _CODE_HUFFMAN,
+            "LZW": _CODE_LZW,
+            "RLE": _CODE_RLE,
+        }
+        tabs_code = st.tabs(["Algoritmo seleccionado", "Entropía de Shannon"])
+        with tabs_code[0]:
+            st.code(algo_code_map.get(algo, ""), language="python")
+        with tabs_code[1]:
+            st.code(_CODE_ENTROPIA, language="python")
 
-class Nodo:
-    def __init__(self, s, f):
-        self.s, self.f, self.L, self.R = s, f, None, None
-    def __lt__(self, o): return self.f < o.f
-
-def huffman_encode(texto: str) -> tuple[bytes, dict, int]:
-    freq = Counter(texto)
-    # 1. Árbol min-heap
-    h = [Nodo(s, f) for s, f in freq.items()]
-    heapq.heapify(h)
-    while len(h) > 1:
-        L, R = heapq.heappop(h), heapq.heappop(h)
-        p = Nodo(None, L.f + R.f)
-        p.L, p.R = L, R
-        heapq.heappush(h, p)
-    # 2. Códigos DFS (izq='0', der='1')
-    def dfs(n, pre, cod):
-        if n.s:  cod[n.s] = pre or "0"
-        else:    dfs(n.L, pre+"0", cod); dfs(n.R, pre+"1", cod)
-        return cod
-    cod = dfs(h[0], "", {})
-    # 3. Bit-packing
-    bits = "".join(cod[c] for c in texto)
-    pad = (8 - len(bits) % 8) % 8;  bits += "0" * pad
-    comp = bytes(int(bits[i:i+8], 2) for i in range(0, len(bits), 8))
-    return comp, cod, pad
-
-def huffman_decode(comp: bytes, cod: dict, pad: int) -> str:
-    inv = {v: k for k, v in cod.items()}       # invertir tabla
-    bits = "".join(f"{b:08b}" for b in comp)
-    bits = bits[:len(bits)-pad] if pad else bits
-    out, buf = [], ""
-    for bit in bits:
-        buf += bit
-        if buf in inv:                          # código completo
-            out.append(inv[buf]); buf = ""
-    return "".join(out)
-
-# Verificación
-texto = "abracadabra huffman demo"
-comp, cod, pad = huffman_encode(texto)
-rec = huffman_decode(comp, cod, pad)
-assert texto == rec, "Error!"
-ratio = (len(texto) * 8) / (len(comp) * 8)
-print(f"Ratio: {ratio:.2f}:1  Lossless: {texto == rec} ✅")
-""",
-            language="python",
-        )
-
-    render_formulas()
+    render_formulas_matematicas()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  TAB 2 — IMAGEN → DCT/JPEG
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── TAB 2: IMAGEN ───────────────────────────────────────────────────────────
 
 def tab_imagen() -> None:
-    cu, ci = st.columns([3, 2], gap="large")
-    with cu:
-        sec("🖼️", "CARGAR IMAGEN")
-        up = st.file_uploader(
-            "img", type=["png", "jpg", "jpeg", "bmp"],
-            key="up_img", label_visibility="collapsed",
-        )
-    with ci:
-        sec("ℹ️", "ALGORITMO: DCT / JPEG (1992)")
-        st.markdown(
-            """<div class="acard">
-<div class="acard-top"><span class="acard-name">DCT — JPEG pipeline</span><span class="acard-tag tv">lossy</span></div>
-<div class="acard-desc">Bloques 8×8 → Level Shift → DCT-II 2D<br>
-→ Cuantización (pérdida) → ZigZag → Huffman AC/DC.<br>
-Decode: Decuantización → IDCT → Level Shift inverso.<br>
-La cuantización descarta detalle de alta frecuencia.<br>
-Uso real: JPEG, MPEG, H.264, WebP, HEIC.</div></div>""",
-            unsafe_allow_html=True,
+    col_up, col_info = st.columns([3, 2], gap="large")
+
+    with col_up:
+        section_label("🖼️", "CARGAR IMAGEN")
+        uploaded = st.file_uploader(
+            "Sube una imagen",
+            type=["png", "jpg", "jpeg", "bmp", "tiff"],
+            key="uploader_imagen",
+            label_visibility="collapsed",
         )
 
-    if not up:
-        nofile("🖼️", "Sube una imagen para analizar",
-               "Formatos: .png  .jpg  .jpeg  .bmp")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS DISPONIBLES")
+        for algo_info in [
+            ("DCT — JPEG", "Transformada discreta del coseno.\nCodificación con pérdida por bloques 8×8.", "tag-v"),
+            ("RLE Imagen", "Run-Length sobre bytes de píxel.\nBase del formato BMP comprimido.", "tag-c"),
+            ("Huffman Bytes", "Huffman sobre distribución de bytes.\nAnálisis entrópico de píxeles.", "tag-g"),
+        ]:
+            st.markdown(
+                f"""<div class="algo-card">
+                      <div class="ac-top">
+                        <span class="ac-name">{algo_info[0]}</span>
+                        <span class="ac-tag {algo_info[2]}">{'lossy' if 'DCT' in algo_info[0] else 'lossless'}</span>
+                      </div>
+                      <div class="ac-desc">{algo_info[1]}</div>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+
+    if uploaded is None:
+        render_no_file(
+            "🖼️",
+            "Sube una imagen para analizarla",
+            "Formatos: .png  .jpg  .jpeg  .bmp  .tiff",
+        )
         return
 
-    datos = up.read()
+    datos = uploaded.read()
+
+    # ── Show image preview ────────────────────────────────────
     pc1, pc2 = st.columns([1, 2], gap="large")
     with pc1:
-        sec("🔍", "PREVISUALIZACIÓN")
+        section_label("🔍", "PREVISUALIZACIÓN")
         st.image(datos, use_container_width=True)
-        if PIL_OK:
+        if PIL_AVAILABLE:
             img = PILImage.open(io.BytesIO(datos))
+            mode = img.mode
             w, h = img.size
-            ibox("📐", f"<strong>{w}×{h}</strong> px · {img.mode} · {fmt(len(datos))}")
+            st.markdown(
+                f"""<div class="stat-mini" style="margin-top:0.5rem">
+                      <span class="sm-val">{w}×{h}</span>
+                      <span class="sm-lbl">{mode} · {fmt_bytes(len(datos))}</span>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+
     with pc2:
-        an = AnImagen(datos)
-        with st.spinner("Calculando…"):
-            st2 = an.calcular()
-        sec("📊", "ANÁLISIS ESTADÍSTICO")
-        render_stats(st2)
-        ibox("💡",
-             f"Entropía: <strong>{st2.entropia:.4f} bits/byte</strong> · "
-             f"H_max = 8.0000 bits · "
-             f"Potencial lossless ≈ <strong>{(1 - st2.entropia / 8) * 100:.1f}%</strong>")
+        analizador = AnalizadorImagen(datos, uploaded.name)
+        with st.spinner("Calculando distribución de bytes…"):
+            stats = analizador.calcular_todo()
 
-    sec("📋", "DISTRIBUCIÓN DE BYTES (PÍXELES)")
-    render_tabla(st2, 30)
-
-    sec("📈", "HISTOGRAMA DE BYTES")
-    df_h = pd.DataFrame({
-        "Valor": list(range(256)),
-        "Freq": [st2.frecuencias.get(b, 0) for b in range(256)],
-    }).set_index("Valor")
-    st.bar_chart(df_h, color="#06b6d4", height=160)
-
-    sec("⚙️", "CODIFICAR + DECODIFICAR CON DCT")
-    c1, c2 = st.columns([4, 1], gap="medium")
-    with c1:
-        cal = st.slider("Factor de calidad Q  (1 = máx compresión · 95 = máx calidad)", 1, 95, 50, key="cal_dct")
-    with c2:
-        ejec = st.button("▶  Encode + Decode DCT", key="btn_img")
-
-    if ejec:
-        with st.spinner("Ejecutando DCT (encode + decode)…"):
-            res = DCT().run(datos, cal)
-
-        sec("🔄", "PIPELINE COMPLETO")
-        render_pipeline("decode")
-        sec("📊", "MÉTRICAS GLOBALES")
-        render_metrics(res)
-        render_verificacion(res)
-
-        st.markdown("---")
-        render_dir("enc", "DCT — JPEG", res.t_enc_ms)
-        render_pasos(res.pasos_enc)
-
-        st.markdown("---")
-        render_dir("dec", "IDCT — Reconstrucción", res.t_dec_ms)
-        render_pasos(res.pasos_dec)
-
-    with st.expander("🔎 Ver Código Fuente — DCT Encode + Decode"):
-        st.code(
-            """# ── DCT — Encode + Decode completo (JPEG-like) ───────────
-import numpy as np, math
-
-Q = np.array([
-    [16,11,10,16,24,40,51,61],[12,12,14,19,26,58,60,55],
-    [14,13,16,24,40,57,69,56],[14,17,22,29,51,87,80,62],
-    [18,22,37,56,68,109,103,77],[24,35,55,64,81,104,113,92],
-    [49,64,78,87,103,121,120,101],[72,92,95,98,112,100,103,99],
-], dtype=float)
-
-def encode(blk: np.ndarray, quality: int = 50):
-    scale = max(1,(100-quality)/50) if quality<50 else 50/max(1,quality)
-    Qs = Q * scale
-    b = blk.astype(float) - 128            # 1. Level shift
-    from scipy.fft import dctn
-    F = dctn(b, norm='ortho')              # 2. DCT-II 2D
-    Fq = np.round(F / Qs).astype(int)     # 3. Cuantización ← PÉRDIDA
-    return Fq, Qs
-
-def decode(Fq: np.ndarray, Qs: np.ndarray) -> np.ndarray:
-    Frec = Fq.astype(float) * Qs          # 1. Decuantización
-    from scipy.fft import idctn
-    b_rec = idctn(Frec, norm='ortho')     # 2. IDCT-II 2D
-    return np.clip(b_rec + 128, 0, 255).astype(np.uint8)  # 3. Level shift inverso
-
-def psnr(orig, rec):
-    mse = np.mean((orig.astype(float) - rec) ** 2)
-    return 10 * math.log10(255**2 / mse) if mse > 0 else float('inf')
-
-# Verificación
-B = np.random.randint(0, 256, (8, 8), dtype=np.uint8)
-for q in [10, 50, 90]:
-    Fq, Qs = encode(B, quality=q)
-    R = decode(Fq, Qs)
-    print(f"Q={q:2d}: PSNR={psnr(B, R):6.2f} dB  zeros_AC={np.sum(Fq[1:]==0)}/63")
-""",
-            language="python",
+        section_label("📊", "DASHBOARD INFORMATIVO")
+        render_dashboard(stats)
+        info_box(
+            "💡",
+            f"La entropía <strong>{stats.entropia:.4f} bits/byte</strong> indica cuánta "
+            f"información contiene cada byte de la imagen.<br>"
+            f"Entropía máxima posible (256 valores): <strong>8.0000 bits</strong>.<br>"
+            f"Potencial de compresión sin pérdida: aprox. "
+            f"<strong>{(1 - stats.entropia/8)*100:.1f}%</strong>.",
         )
 
-    render_formulas()
+    section_label("📋", "DISTRIBUCIÓN DE BYTES (PÍXELES)")
+    render_tabla_simbolos(stats, max_rows=40)
+
+    # ── Histogram ─────────────────────────────────────────────
+    section_label("📈", "HISTOGRAMA DE BYTES")
+    hist_data = {
+        "Valor byte": list(range(256)),
+        "Frecuencia": [stats.frecuencias.get(b, 0) for b in range(256)],
+    }
+    df_hist = pd.DataFrame(hist_data).set_index("Valor byte")
+    st.bar_chart(df_hist, color="#06b6d4", height=200)
+
+    # ── Compression ───────────────────────────────────────────
+    section_label("⚙️", "ALGORITMO DE COMPRESIÓN")
+    c_sel, c_q, c_btn = st.columns([2, 2, 1], gap="medium")
+    with c_sel:
+        algo_img = st.selectbox(
+            "Algoritmo",
+            ["DCT — JPEG-like", "RLE", "Huffman (bytes)"],
+            key="algo_imagen",
+            label_visibility="collapsed",
+        )
+    with c_q:
+        calidad = st.slider(
+            "Calidad (solo DCT)",
+            min_value=1, max_value=95, value=50,
+            key="calidad_dct",
+            disabled=(algo_img != "DCT — JPEG-like"),
+        )
+    with c_btn:
+        comprimir_img = st.button("▶ Comprimir", key="btn_imagen")
+
+    if comprimir_img:
+        with st.spinner(f"Aplicando {algo_img}…"):
+            if algo_img == "DCT — JPEG-like":
+                res = CodificadorDCT().comprimir(datos, calidad)
+            elif algo_img == "RLE":
+                res = CodificadorRLE().comprimir(datos)
+            else:
+                res = CodificadorHuffman(datos).comprimir()
+
+        section_label("📦", f"RESULTADO — {res.nombre_algoritmo}")
+        render_resultado_compresion(res)
+        render_pasos(res.pasos)
+        if res.tabla_codigos:
+            render_huffman_codes(res.tabla_codigos)
+
+    with st.expander("🔎 Ver Código Fuente del Algoritmo", expanded=False):
+        t1, t2, t3 = st.tabs(["DCT / JPEG", "RLE", "Entropía"])
+        with t1:
+            st.code(_CODE_DCT, language="python")
+        with t2:
+            st.code(_CODE_RLE, language="python")
+        with t3:
+            st.code(_CODE_ENTROPIA, language="python")
+
+    render_formulas_matematicas()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  TAB 3 — AUDIO → μ-LAW G.711
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── TAB 3: AUDIO ────────────────────────────────────────────────────────────
 
-def _read_wav(datos: bytes) -> Tuple[bytes, int, int, int]:
+def _read_wav_pcm(datos: bytes) -> Tuple[bytes, int, int, int]:
+    """Extract raw PCM from WAV bytes. Returns (pcm, n_channels, sample_width, framerate)."""
     try:
         with wave.open(io.BytesIO(datos)) as wf:
-            return (wf.readframes(wf.getnframes()),
-                    wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
+            return wf.readframes(wf.getnframes()), wf.getnchannels(), wf.getsampwidth(), wf.getframerate()
     except Exception:
         return datos, 1, 2, 44100
 
 
 def tab_audio() -> None:
-    cu, ci = st.columns([3, 2], gap="large")
-    with cu:
-        sec("🎵", "CARGAR AUDIO")
-        up = st.file_uploader(
-            "aud", type=["wav", "mp3", "ogg", "flac"],
-            key="up_aud", label_visibility="collapsed",
-        )
-    with ci:
-        sec("ℹ️", "ALGORITMO: μ-Law G.711 (1972)")
-        st.markdown(
-            """<div class="acard">
-<div class="acard-top"><span class="acard-name">μ-Law G.711</span><span class="acard-tag tg">quasi-lossless</span></div>
-<div class="acard-desc">Companding logarítmico: PCM 16-bit → μ-Law 8-bit.<br>
-Ratio EXACTO 2:1 — siempre constante.<br>
-Basado en percepción logarítmica del oído humano.<br>
-Decode: expansión inversa → PCM 16-bit.<br>
-Uso real: telefonía PSTN, VoIP, G.711 ITU-T.</div></div>""",
-            unsafe_allow_html=True,
+    col_up, col_info = st.columns([3, 2], gap="large")
+
+    with col_up:
+        section_label("🎵", "CARGAR ARCHIVO DE AUDIO")
+        uploaded = st.file_uploader(
+            "Sube un archivo de audio (.wav recomendado para análisis PCM)",
+            type=["wav", "mp3", "ogg", "flac"],
+            key="uploader_audio",
+            label_visibility="collapsed",
         )
 
-    if not up:
-        nofile("🎵", "Sube un archivo de audio (.wav PCM recomendado)",
-               "Formatos: .wav  .mp3  .ogg  .flac")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS DISPONIBLES")
+        for algo_info in [
+            ("μ-Law G.711", "Companding logarítmico 2:1.\nEstándar telefónico (VoIP, PSTN).", "tag-c"),
+            ("ADPCM", "Codificación diferencial adaptiva 4:1.\nEstándar IMA/DVI para multimedia.", "tag-v"),
+            ("Huffman PCM", "Huffman sobre distribución de muestras.\nAnálisis entrópico de audio.", "tag-g"),
+        ]:
+            st.markdown(
+                f"""<div class="algo-card">
+                      <div class="ac-top">
+                        <span class="ac-name">{algo_info[0]}</span>
+                        <span class="ac-tag {algo_info[2]}">lossless*</span>
+                      </div>
+                      <div class="ac-desc">{algo_info[1]}</div>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+
+    if uploaded is None:
+        render_no_file(
+            "🎵",
+            "Sube un archivo de audio para analizarlo",
+            "Recomendado: .wav PCM 16-bit · También: .mp3  .ogg  .flac",
+        )
         return
 
-    datos = up.read()
-    is_wav = up.name.lower().endswith(".wav")
+    datos = uploaded.read()
+    is_wav = uploaded.name.lower().endswith(".wav")
+
     if is_wav:
-        pcm, n_ch, sw, fr = _read_wav(datos)
-        dur = len(pcm) / (n_ch * sw * fr) if fr else 0
-        ibox("🔊",
-             f"<strong>WAV PCM detectado</strong> · {n_ch}ch · {sw * 8}-bit · {fr:,} Hz · "
-             f"<strong>{dur:.2f} s</strong> · {fmt(len(pcm))} PCM")
-        datos_a = pcm
-    else:
-        ibox("⚠️", "Formato comprimido — se analiza el flujo de bytes en bruto.", "a")
-        datos_a = datos
-
-    an = AnAudio(datos_a)
-    with st.spinner("Calculando…"):
-        st3 = an.calcular()
-
-    sec("📊", "ANÁLISIS ESTADÍSTICO")
-    render_stats(st3)
-
-    if is_wav and len(datos_a) >= 4:
-        sec("〰️", "FORMA DE ONDA (muestra de 500 puntos)")
-        arr = np.frombuffer(datos_a, dtype=np.int16)
-        step = max(1, len(arr) // 500)
-        st.line_chart(pd.DataFrame({"Amplitud": arr[::step][:500]}), color="#06b6d4", height=140)
-
-    sec("📋", "DISTRIBUCIÓN DE BYTES DE AUDIO")
-    render_tabla(st3, 25)
-
-    sec("⚙️", "CODIFICAR + DECODIFICAR CON μ-LAW G.711")
-    if st.button("▶  Encode + Decode μ-Law G.711", key="btn_aud"):
-        with st.spinner("Ejecutando μ-Law (encode + decode)…"):
-            res = MuLaw().run(datos_a)
-
-        sec("🔄", "PIPELINE COMPLETO")
-        render_pipeline("decode")
-        sec("📊", "MÉTRICAS GLOBALES")
-        render_metrics(res)
-        render_verificacion(res)
-
-        st.markdown("---")
-        render_dir("enc", "μ-Law G.711 (Companding)", res.t_enc_ms)
-        render_pasos(res.pasos_enc)
-
-        st.markdown("---")
-        render_dir("dec", "μ-Law G.711 (Expansión)", res.t_dec_ms)
-        render_pasos(res.pasos_dec)
-
-        if is_wav and len(datos_a) >= 4:
-            sec("〰️", "COMPARACIÓN FORMA DE ONDA: ORIGINAL vs DECODIFICADO")
-            orig_a = np.frombuffer(datos_a, dtype=np.int16)
-            dec_a = np.frombuffer(res.datos_dec[: len(datos_a)], dtype=np.int16)
-            step2 = max(1, len(orig_a) // 300)
-            df_cmp = pd.DataFrame({
-                "Original PCM 16-bit": orig_a[::step2][:300].tolist(),
-                "Decodificado μ-Law→PCM": dec_a[::step2][:300].tolist(),
-            })
-            st.line_chart(df_cmp, color=["#06b6d4", "#8b5cf6"], height=180)
-            ibox("🔬",
-                 "Las dos formas de onda son visualmente idénticas → "
-                 "el oído <strong>no percibe la diferencia</strong>.<br>"
-                 "La pequeña distorsión logarítmica es imperceptible en señales de voz.", "g")
-
-    with st.expander("🔎 Ver Código Fuente — μ-Law G.711 Encode + Decode"):
-        st.code(
-            """# ── μ-Law G.711 — Encode + Decode completo ───────────────
-import math, struct
-
-MU, BIAS = 255, 132
-
-def encode_sample(s: int) -> int:
-    \"\"\"PCM 16-bit → μ-Law 8-bit (G.711)\"\"\"
-    s    = max(-32768, min(32767, s))
-    sign = 0x00 if s >= 0 else 0x80
-    mag  = min(abs(s), 32635) + BIAS
-    exp  = max(0, min(int(math.log2(mag)) - 7, 7))
-    mant = (mag >> (exp + 3)) & 0x0F
-    return (~(sign | (exp << 4) | mant)) & 0xFF   # complementar bits G.711
-
-def decode_sample(b: int) -> int:
-    \"\"\"μ-Law 8-bit → PCM 16-bit\"\"\"
-    b    = ~b & 0xFF                 # descomplementar
-    sign = b & 0x80
-    exp  = (b >> 4) & 0x07
-    mant = b & 0x0F
-    mag  = ((mant << 1) | 1) << (exp + 2)
-    return -(mag - BIAS) if sign else (mag - BIAS)
-
-def encode_audio(pcm_bytes: bytes) -> bytes:
-    n = len(pcm_bytes) // 2
-    samples = struct.unpack(f'<{n}h', pcm_bytes[:n*2])
-    return bytes(encode_sample(s) for s in samples)
-
-def decode_audio(mulaw_bytes: bytes) -> bytes:
-    samples = [decode_sample(b) for b in mulaw_bytes]
-    return struct.pack(f'<{len(samples)}h', *samples)
-
-# Verificación
-pcm = struct.pack('<4h', 0, 16383, -16383, 32767)
-enc = encode_audio(pcm)
-dec = decode_audio(enc)
-orig  = struct.unpack('<4h', pcm)
-recon = struct.unpack('<4h', dec)
-print(f"Original:   {orig}")
-print(f"μ-Law 8bit: {list(enc)}")
-print(f"Recuperado: {recon}")
-print(f"Ratio: {len(pcm)/len(enc):.1f}:1  EXACTO")
-""",
-            language="python",
+        pcm_bytes, n_ch, samp_w, framerate = _read_wav_pcm(datos)
+        duracion_s = len(pcm_bytes) / (n_ch * samp_w * framerate) if framerate else 0
+        info_box(
+            "🔊",
+            f"<strong>WAV PCM</strong> detectado · "
+            f"{n_ch}ch · {samp_w*8}-bit · {framerate:,} Hz · "
+            f"Duración: <strong>{duracion_s:.2f} s</strong> · "
+            f"{fmt_bytes(len(pcm_bytes))} de datos PCM",
         )
+        datos_analisis = pcm_bytes
+    else:
+        info_box(
+            "⚠️",
+            "Formato comprimido detectado. Se analizará el flujo de bytes en bruto.<br>"
+            "Para análisis PCM completo, sube un archivo <strong>.wav PCM 16-bit</strong>.",
+            "amber",
+        )
+        datos_analisis = datos
 
-    render_formulas()
+    analizador = AnalizadorAudio(datos_analisis, uploaded.name)
+    with st.spinner("Calculando estadísticas de audio…"):
+        stats = analizador.calcular_todo()
+
+    section_label("📊", "DASHBOARD INFORMATIVO")
+    render_dashboard(stats)
+
+    info_box(
+        "🧮",
+        f"La entropía del audio es <strong>{stats.entropia:.4f} bits/byte</strong>.<br>"
+        f"Audio PCM sin comprimir: 16 bits/muestra. Entropía efectiva: "
+        f"<strong>{stats.entropia:.2f} bits</strong>.<br>"
+        f"Potencial de compresión sin pérdida: "
+        f"<strong>{max(0, (1 - stats.entropia/16)*100):.1f}%</strong> (aprox. para PCM 16-bit).",
+    )
+
+    section_label("📋", "DISTRIBUCIÓN DE BYTES DE AUDIO")
+    render_tabla_simbolos(stats, max_rows=35)
+
+    # ── Waveform (mini) ───────────────────────────────────────
+    if is_wav and len(pcm_bytes) >= 4:
+        section_label("〰️", "FORMA DE ONDA (MUESTRA)")
+        n_s = len(pcm_bytes) // 2
+        samples_arr = np.frombuffer(pcm_bytes, dtype=np.int16)
+        step = max(1, len(samples_arr) // 500)
+        waveform = samples_arr[::step][:500]
+        wf_df = pd.DataFrame({"Amplitud": waveform})
+        st.line_chart(wf_df, color="#06b6d4", height=160)
+
+    # ── Compression ───────────────────────────────────────────
+    section_label("⚙️", "ALGORITMO DE COMPRESIÓN")
+    c_sel, c_btn = st.columns([4, 1], gap="medium")
+    with c_sel:
+        algo_aud = st.selectbox(
+            "Algoritmo",
+            ["μ-Law G.711", "ADPCM", "Huffman (bytes)"],
+            key="algo_audio",
+            label_visibility="collapsed",
+        )
+    with c_btn:
+        comprimir_aud = st.button("▶ Comprimir", key="btn_audio")
+
+    if comprimir_aud:
+        with st.spinner(f"Aplicando {algo_aud}…"):
+            if algo_aud == "μ-Law G.711":
+                res = CodificadorMuLaw().comprimir(datos_analisis)
+            elif algo_aud == "ADPCM":
+                res = CodificadorADPCM().comprimir(datos_analisis)
+            else:
+                res = CodificadorHuffman(datos_analisis).comprimir()
+
+        section_label("📦", f"RESULTADO — {res.nombre_algoritmo}")
+        render_resultado_compresion(res)
+        render_pasos(res.pasos)
+        if res.tabla_codigos:
+            render_huffman_codes(res.tabla_codigos)
+
+    with st.expander("🔎 Ver Código Fuente del Algoritmo", expanded=False):
+        t1, t2, t3 = st.tabs(["μ-Law G.711", "ADPCM (IMA)", "Entropía"])
+        with t1:
+            st.code(_CODE_MULAW, language="python")
+        with t2:
+            st.code(_CODE_ADPCM, language="python")
+        with t3:
+            st.code(_CODE_ENTROPIA, language="python")
+
+    render_formulas_matematicas()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  TAB 4 — VIDEO → RLE + H.264 educativo
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── TAB 4: VIDEO ────────────────────────────────────────────────────────────
 
 def tab_video() -> None:
-    cu, ci = st.columns([3, 2], gap="large")
-    with cu:
-        sec("🎬", "CARGAR VIDEO")
-        up = st.file_uploader(
-            "vid", type=["mp4", "avi", "mkv", "mov", "webm"],
-            key="up_vid", label_visibility="collapsed",
-        )
-    with ci:
-        sec("ℹ️", "ALGORITMO: RLE + Pipeline H.264")
-        st.markdown(
-            """<div class="acard">
-<div class="acard-top"><span class="acard-name">RLE + H.264 (educativo)</span><span class="acard-tag tc">lossless/lossy</span></div>
-<div class="acard-desc">RLE sobre bytes del contenedor (análisis didáctico).<br>
-Video comprimido ≈ peor caso para RLE (bytes ~uniformes).<br>
-Pipeline H.264 completo: Motion Est. + DCT + CABAC.<br>
-Encode: tramas I/P/B + cuantización del residual.<br>
-Decode: IDCT + compensación de movimiento (MC).</div></div>""",
-            unsafe_allow_html=True,
+    col_up, col_info = st.columns([3, 2], gap="large")
+
+    with col_up:
+        section_label("🎬", "CARGAR ARCHIVO DE VIDEO")
+        uploaded = st.file_uploader(
+            "Sube un archivo de video",
+            type=["mp4", "avi", "mkv", "mov", "webm"],
+            key="uploader_video",
+            label_visibility="collapsed",
         )
 
-    if not up:
-        nofile("🎬", "Sube un video para analizarlo",
-               "Formatos: .mp4  .avi  .mkv  .mov  .webm")
+    with col_info:
+        section_label("ℹ️", "CONCEPTOS APLICADOS")
+        for concepto in [
+            ("Tramas I/P/B", "Intra, Predicción, Bidireccional.\nBase de H.264/HEVC.", "tag-c"),
+            ("DCT Temporal", "DCT sobre diferencias entre frames.\nReducción de redundancia temporal.", "tag-v"),
+            ("Entropía Cabac", "Codificación aritmética adaptiva.\nHasta 15% mejor que Huffman.", "tag-g"),
+        ]:
+            st.markdown(
+                f"""<div class="algo-card">
+                      <div class="ac-top">
+                        <span class="ac-name">{concepto[0]}</span>
+                        <span class="ac-tag {concepto[2]}">concepto</span>
+                      </div>
+                      <div class="ac-desc">{concepto[1]}</div>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+
+    if uploaded is None:
+        render_no_file(
+            "🎬",
+            "Sube un archivo de video para analizarlo",
+            "Formatos: .mp4  .avi  .mkv  .mov  .webm",
+        )
         return
 
-    datos = up.read()
-    an = AnVideo(datos)
-    ibox("ℹ️",
-         f"<strong>{up.name}</strong> · {fmt(len(datos))} · "
-         "Análisis sobre los primeros 80 KB del flujo del contenedor.")
+    datos = uploaded.read()
+    analizador = AnalizadorVideo(datos, uploaded.name)
 
-    with st.spinner("Analizando flujo…"):
-        st4 = an.calcular()
+    info_box(
+        "ℹ️",
+        f"<strong>Nota:</strong> El análisis byte-level del contenedor de video muestra la "
+        f"distribución de bits del flujo comprimido.<br>"
+        f"Archivo: <strong>{uploaded.name}</strong> · "
+        f"Tamaño: <strong>{fmt_bytes(len(datos))}</strong><br>"
+        f"Para análisis frame-a-frame usa OpenCV + esta arquitectura como backend.",
+    )
 
-    sec("📊", "ANÁLISIS DEL FLUJO COMPRIMIDO")
-    render_stats(st4)
-    ibox("🔬",
-         f"Alta entropía (<strong>{st4.entropia:.4f} bits/byte</strong>) porque H.264/HEVC "
-         "ya aplicó codificación entrópica (CABAC).<br>"
-         "Un video RAW tendría entropía menor y mayor potencial de compresión.", "v")
+    with st.spinner("Analizando flujo de bytes de video…"):
+        stats = analizador.calcular_todo()
 
-    sec("📋", "DISTRIBUCIÓN DE BYTES DEL FLUJO")
-    render_tabla(st4, 30)
+    section_label("📊", "DASHBOARD INFORMATIVO")
+    render_dashboard(stats)
 
-    sec("📈", "HISTOGRAMA DEL FLUJO")
-    df_h = pd.DataFrame({
-        "Val": list(range(256)),
-        "F": [st4.frecuencias.get(b, 0) for b in range(256)],
-    }).set_index("Val")
-    st.bar_chart(df_h, color="#8b5cf6", height=150)
+    info_box(
+        "🔬",
+        f"El flujo de video comprimido (H.264/HEVC) tiene entropía alta "
+        f"(<strong>{stats.entropia:.4f} bits/byte</strong>) porque "
+        f"los datos ya están codificados entrópicamente.<br>"
+        f"Un video RAW tendría entropía menor y sería más compresible.",
+        "violet",
+    )
 
-    sec("⚙️", "APLICAR RLE AL FLUJO DEL CONTENEDOR")
-    if st.button("▶  Encode + Decode RLE", key="btn_vid"):
-        with st.spinner("Ejecutando RLE…"):
-            res = RLE().run(datos[:50_000])
+    section_label("📋", "DISTRIBUCIÓN DE BYTES DEL FLUJO")
+    render_tabla_simbolos(stats, max_rows=40)
 
-        sec("🔄", "PIPELINE COMPLETO")
-        render_pipeline("decode")
-        sec("📊", "MÉTRICAS GLOBALES")
-        render_metrics(res)
-        render_verificacion(res)
+    # ── Byte histogram ────────────────────────────────────────
+    section_label("📈", "HISTOGRAMA DE BYTES (flujo comprimido)")
+    hist = {"Valor": list(range(256)), "Freq": [stats.frecuencias.get(b, 0) for b in range(256)]}
+    df_h = pd.DataFrame(hist).set_index("Valor")
+    st.bar_chart(df_h, color="#8b5cf6", height=180)
 
-        st.markdown("---")
-        render_dir("enc", "RLE (Run-Length Encoding)", res.t_enc_ms)
-        render_pasos(res.pasos_enc)
+    # ── Video compression theory ──────────────────────────────
+    section_label("🎞️", "ARQUITECTURA DE COMPRESIÓN DE VIDEO")
+    info_box(
+        "📐",
+        """<strong>Pipeline H.264/HEVC (educativo):</strong><br>
+        1. <strong>Partición en Macroblocks</strong> (16×16 píxeles por defecto)<br>
+        2. <strong>Predicción Intra (tramas I)</strong>: DCT sobre bloque actual<br>
+        3. <strong>Predicción Inter (tramas P/B)</strong>: Motion Estimation + DCT sobre residual<br>
+        4. <strong>Cuantización</strong>: reducción de precisión de coef. DCT<br>
+        5. <strong>CABAC/CAVLC</strong>: codificación entrópica de los coeficientes cuantizados<br>
+        6. <strong>Deblocking Filter</strong>: suavizado de artefactos en bloques""",
+    )
 
-        st.markdown("---")
-        render_dir("dec", "RLE (Expansión de Runs)", res.t_dec_ms)
-        render_pasos(res.pasos_dec)
+    # ── Metrics simulation ────────────────────────────────────
+    section_label("📦", "SIMULACIÓN DE COMPRESIÓN (Teórica)")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        factor_i = 3.5
+        st.metric("Trama I (Intra)", f"{factor_i:.1f}:1", "Solo DCT espacial")
+    with c2:
+        factor_p = 12.0
+        st.metric("Trama P (Predictiva)", f"{factor_p:.1f}:1", "DCT + Motion Vector")
+    with c3:
+        factor_b = 20.0
+        st.metric("Trama B (Bidireccional)", f"{factor_b:.1f}:1", "Máxima compresión")
 
-        if res.tasa < 1.0:
-            ibox("⚠️",
-                 "<strong>RLE no es eficiente en flujos ya comprimidos.</strong><br>"
-                 "H.264/HEVC ya aplica CABAC → bytes casi uniformes → sin runs repetidos.<br>"
-                 "Para video real se usa el pipeline H.264 completo (ver abajo).", "a")
-
-    # Pipeline H.264 educativo
-    sec("🎞️", "PIPELINE H.264 — ENCODE + DECODE EDUCATIVO")
-    c_e, c_d = st.columns(2, gap="large")
-
-    with c_e:
-        render_dir("enc", "H.264 Encoder", 0)
-        for tit, det in [
-            ("E-1 · Partición en Macroblocks (16×16)",
-             "La imagen se divide en macroblocks de 16×16 píxeles.\n"
-             "Sub-particiones: 16×16, 16×8, 8×16, 8×8, 4×4.\n"
-             "Cada macroblock se procesa independientemente."),
-            ("E-2 · Estimación de Movimiento (Motion Estimation)",
-             "Para tramas P/B: se busca el mejor macroblock en el frame de referencia.\n"
-             "SAD = ΣΣ |curr(x,y) − ref(x+mvx, y+mvy)|  ← métrica de similitud\n"
-             "Se transmite SOLO el vector de movimiento (mvx, mvy) → muy compacto."),
-            ("E-3 · DCT + Cuantización del Residual",
-             "Residual = Frame_actual − Frame_predicho\n"
-             "DCT transforma el residual al dominio frecuencial.\n"
-             "Cuantización: descarta coeficientes AC de alta frecuencia.\n"
-             "→ LOSSY: aquí ocurre la pérdida de información."),
-            ("E-4 · ZigZag + CABAC (Codificación Entrópica)",
-             "ZigZag reordena la matriz DCT 8×8 → vector 1D (agrupa ceros).\n"
-             "CABAC: codificación aritmética adaptiva por contexto.\n"
-             "Hasta 15% más eficiente que Huffman convencional.\n"
-             "Salida: NAL Units del bitstream H.264."),
-        ]:
-            with st.expander(tit, expanded=False):
-                st.markdown(f'<div class="sdt">{det}</div>', unsafe_allow_html=True)
-
-    with c_d:
-        render_dir("dec", "H.264 Decoder", 0)
-        for tit, det in [
-            ("D-1 · Parser de NAL Units",
-             "Se identifican y separan las NAL Units del bitstream.\n"
-             "Se detecta el tipo de trama: I (Intra), P (Predictiva), B (Bidireccional).\n"
-             "Se extraen los parámetros del SPS y PPS."),
-            ("D-2 · Decodificación Entrópica (CABAC)",
-             "Se invierte el modelo aritmético CABAC por contexto.\n"
-             "Se recuperan los coeficientes DCT cuantizados.\n"
-             "Se reconstruye la matriz de coeficientes para cada bloque."),
-            ("D-3 · Decuantización + IDCT",
-             "F_rec(u,v) = F_q(u,v) × Q(u,v)  ← decuantización\n"
-             "IDCT-II transforma de regreso al dominio espacial.\n"
-             "Residual_rec = IDCT(F_decuantizado)  ← aproximación"),
-            ("D-4 · Compensación de Movimiento + Reconstrucción",
-             "Frame_rec = MC(frame_ref, MVs) + Residual_rec\n"
-             "Deblocking filter: suaviza artefactos en bordes de bloques.\n"
-             "Frame_rec → referencia para los siguientes frames.\n"
-             "PSNR típico H.264: 35–45 dB en video de alta calidad."),
-        ]:
-            with st.expander(tit, expanded=False):
-                st.markdown(f'<div class="sdt">{det}</div>', unsafe_allow_html=True)
-
-    sec("📦", "TASAS DE COMPRESIÓN H.264 POR TIPO DE TRAMA")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Trama I (Intra)", "3–4:1", "Solo DCT espacial")
-    with c2: st.metric("Trama P (Pred.)", "10–15:1", "MV + DCT residual")
-    with c3: st.metric("Trama B (Bi-dir.)", "15–25:1", "MV doble + DCT")
-    with c4: st.metric("GOP completo", "50–200:1", "Promedio ponderado")
-
-    with st.expander("🔎 Ver Código Fuente — RLE + Motion Estimation H.264"):
+    with st.expander("🔎 Ver Código Fuente — Conceptos de Video", expanded=False):
         st.code(
-            """# ── RLE — Encode + Decode completo ────────────────────────
-def rle_encode(datos: bytes) -> bytes:
-    out, i = bytearray(), 0
-    while i < len(datos):
-        b, n = datos[i], 1
-        while i+n < len(datos) and datos[i+n] == b and n < 255: n += 1
-        out.extend([n, b])    # par (conteo, valor)
-        i += n
-    return bytes(out)
-
-def rle_decode(datos: bytes) -> bytes:
-    out, i = bytearray(), 0
-    while i+1 < len(datos):
-        n, b = datos[i], datos[i+1]
-        out.extend([b] * n)   # expandir run
-        i += 2
-    return bytes(out)
-
-# ── Motion Estimation H.264 (educativo) ──────────────────────
+            """\
+# ╔══════════════════════════════════════════════════════════╗
+# ║  COMPRESIÓN DE VIDEO — Conceptos H.264/HEVC              ║
+# ╚══════════════════════════════════════════════════════════╝
 import numpy as np
 
-def motion_estimation(ref, curr, bs=16, sr=16):
-    \"\"\"Full-search block matching. Retorna lista de (mvx, mvy).\"\"\"
-    H, W = curr.shape; mvs = []
-    for i in range(0, H-bs+1, bs):
-        for j in range(0, W-bs+1, bs):
-            blk = curr[i:i+bs, j:j+bs]
+# ── Estimación de Movimiento (Motion Estimation) ──────────
+def motion_estimation(frame_ref: np.ndarray, frame_curr: np.ndarray,
+                       block_size: int = 16) -> list[tuple]:
+    \"\"\"
+    Full-search block matching.
+    Para cada macroblock en frame_curr, encuentra el mejor
+    matching en frame_ref dentro de un rango de búsqueda.
+    
+    Métrica: SAD (Sum of Absolute Differences)
+    SAD(mv) = ΣΣ |frame_curr(x,y) - frame_ref(x+mvx, y+mvy)|
+    \"\"\"
+    H, W = frame_curr.shape
+    motion_vectors = []
+    for i in range(0, H - block_size, block_size):
+        for j in range(0, W - block_size, block_size):
+            curr_block = frame_curr[i:i+block_size, j:j+block_size]
             best_sad, best_mv = float('inf'), (0, 0)
-            for dy in range(-sr, sr+1):
-                for dx in range(-sr, sr+1):
+            # Búsqueda en ventana ±16 píxeles (STUB: rango limitado)
+            for dy in range(-16, 17):
+                for dx in range(-16, 17):
                     ri, rj = i+dy, j+dx
-                    if 0 <= ri <= H-bs and 0 <= rj <= W-bs:
-                        sad = np.sum(np.abs(blk.astype(int)
-                               - ref[ri:ri+bs, rj:rj+bs]))
+                    if 0<=ri and ri+block_size<=H and 0<=rj and rj+block_size<=W:
+                        ref_block = frame_ref[ri:ri+block_size, rj:rj+block_size]
+                        sad = np.sum(np.abs(curr_block.astype(int) - ref_block))
                         if sad < best_sad:
                             best_sad, best_mv = sad, (dx, dy)
-            mvs.append(best_mv)
-    return mvs
+            motion_vectors.append(best_mv)
+    return motion_vectors   # lista de (mvx, mvy) por macroblock
 
-def motion_compensation(ref, mvs, bs=16):
-    \"\"\"DECODE: reconstruir frame predicho desde vectores de movimiento.\"\"\"
-    H, W = ref.shape; pred = np.zeros_like(ref); k = 0
-    for i in range(0, H-bs+1, bs):
-        for j in range(0, W-bs+1, bs):
-            mvx, mvy = mvs[k]; k += 1
-            ri = max(0, min(H-bs, i+mvy))
-            rj = max(0, min(W-bs, j+mvx))
-            pred[i:i+bs, j:j+bs] = ref[ri:ri+bs, rj:rj+bs]
-    return pred
+# ── Codificación del Residual ──────────────────────────────
+def encode_residual(original: np.ndarray, predicted: np.ndarray) -> np.ndarray:
+    \"\"\"
+    Residual = Original − Predicho
+    El residual tiene menor energía → más compresible con DCT.
+    \"\"\"
+    return original.astype(int) - predicted.astype(int)
+
+# ── Tipos de tramas ────────────────────────────────────────
+# Trama I (Intra):   codificada sin referencia a otros frames
+#                    Solo DCT espacial sobre cada macroblock
+# Trama P (Pred):    referencia el frame I más reciente
+#                    Motion vector + DCT del residual
+# Trama B (Bi-dir):  referencia frames I y P anteriores y futuros
+#                    Mayor compresión pero más complejidad
+# 
+# Estructura típica GOP (Group Of Pictures):
+#   I B B P B B P B B I ...  (GOP size = 12 en H.264)
 """,
             language="python",
         )
 
-    render_formulas()
+    render_formulas_matematicas()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  MAIN  —  patch st reference then run
-# ─────────────────────────────────────────────────────────────────────────────
-
-# We use a module-level alias so inner functions can call st directly
-
+# ═════════════════════════════════════════════════════════════════════════════
+#  MAIN APP
+# ═════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
     inject_css()
     render_header()
 
-    tabs = st.tabs([
-        "📄  Texto → Huffman",
-        "🖼️  Imagen → DCT/JPEG",
-        "🎵  Audio → μ-Law G.711",
-        "🎬  Video → RLE + H.264",
-    ])
+    tabs = st.tabs(["📄  Texto", "🖼️  Imagen", "🎵  Audio", "🎬  Video"])
+
     with tabs[0]:
         tab_texto()
     with tabs[1]:
@@ -2169,12 +2697,16 @@ def main() -> None:
     with tabs[3]:
         tab_video()
 
+    # ── Footer ─────────────────────────────────────────────────
     st.markdown(
-        """<div style="margin-top:3rem;padding:0.85rem 0;
-border-top:1px solid rgba(6,182,212,0.13);text-align:center;
-font-size:0.61rem;color:#4e5f7a">
-DataLab v3.0 · Huffman (1952) · DCT/JPEG (1992) · μ-Law G.711 (1972) · RLE · H.264
-</div>""",
+        """
+        <div style="margin-top:3rem;padding:1rem 0;border-top:1px solid var(--border);
+                    text-align:center;font-family:'IBM Plex Mono',monospace;
+                    font-size:0.65rem;color:var(--muted)">
+          DataLab · Compresión de Datos · Laboratorio de Teoría de la Información &nbsp;·&nbsp;
+          Shannon (1948) · Huffman (1952) · LZW (1977–1984) · JPEG (1992) · G.711 (1972)
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
