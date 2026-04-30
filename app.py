@@ -394,7 +394,7 @@ class CodificadorRLE:
             idx += 2
         datos_reconstruidos = bytes(decomp)
 
-        pasos = [{"titulo": "Particionado Secuencial (Bloques RLE)", "detalle": "Datos agrupados:", "html": html_rle}]
+        pasos = [{"titulo": "Particionado Secuencial (Bloques RLE)", "detalle": "Datos agrupados visualmente:", "html": html_rle}]
         return ResultadoCompresion("RLE", datos, bytes(comprimido), datos_reconstruidos, len(datos), max(1, len(comprimido)), len(datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(datos)), (time.perf_counter() - t0) * 1000, pasos, es_stub=False)
 
 # ─── D. DCT (Image / JPEG-like) ───────────────────────────────────────────────
@@ -768,6 +768,7 @@ def tab_imagen() -> None:
         render_arbol_huffman(res)
         render_descodificacion(res, "imagen")
 
+
 def tab_audio() -> None:
     col_up, col_info = st.columns([3, 2], gap="large")
     with col_up:
@@ -808,6 +809,7 @@ def tab_audio() -> None:
         render_arbol_huffman(res)
         render_descodificacion(res, "audio")
 
+
 def tab_video() -> None:
     col_up, col_info = st.columns([3, 2], gap="large")
     with col_up:
@@ -841,14 +843,68 @@ def tab_video() -> None:
     if btn_comp:
         render_codigo_y_formulas(algo_vid, stats)
         
-        # Simulated result for video
         orig = len(datos) * 45  
         comp = len(datos)
+        
+        # ── HTML NATIVO PARA PASOS DE VIDEO ──
+        html_macroblocks = '''
+        <div style="display:flex; flex-direction:column; align-items:center; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:1rem;">FRAME DIVIDIDO EN MACROBLOCKS</div>
+            <div style="display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; background:var(--border); padding:2px; border-radius:4px;">
+        '''
+        for _ in range(64):
+            html_macroblocks += '<div style="width:20px; height:20px; background:var(--bg-2); border:1px solid rgba(6,182,212,0.3);"></div>'
+        html_macroblocks += '</div></div>'
+
+        html_motion = '''
+        <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:center; justify-content:center; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="text-align:center;">
+                <div style="width:80px; height:80px; border:2px dashed var(--muted); position:relative; background:var(--bg-2);">
+                    <div style="width:25px; height:25px; background:var(--violet); position:absolute; top:10px; left:10px; border-radius:4px;"></div>
+                </div>
+                <div style="font-size:0.65rem; color:var(--muted); margin-top:8px; font-family:'IBM Plex Mono', monospace;">Frame Referencia (t-1)</div>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:center; color:var(--cyan);">
+                <div style="font-weight:bold; font-family:'IBM Plex Mono', monospace; font-size:0.8rem; background:rgba(6,182,212,0.1); padding:4px 8px; border-radius:4px; border:1px solid rgba(6,182,212,0.3);">Vect. Mov (dx:+20, dy:+15)</div>
+                <div style="font-size:1.5rem; margin-top:4px;">➔</div>
+            </div>
+            <div style="text-align:center;">
+                <div style="width:80px; height:80px; border:2px solid var(--border-strong); position:relative; background:var(--bg-2);">
+                    <div style="width:25px; height:25px; background:var(--cyan); position:absolute; top:25px; left:30px; border-radius:4px; box-shadow: 0 0 10px rgba(6,182,212,0.5);"></div>
+                    <div style="width:25px; height:25px; border:2px dashed rgba(139,92,246,0.5); position:absolute; top:10px; left:10px; border-radius:4px;"></div>
+                </div>
+                <div style="font-size:0.65rem; color:var(--cyan); margin-top:8px; font-family:'IBM Plex Mono', monospace;">Frame Actual (t)</div>
+            </div>
+        </div>
+        '''
+
+        html_residual = '''
+        <div style="display:flex; flex-direction:column; align-items:center; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:1rem;">DCT DEL RESIDUAL (Errores cercanos a 0)</div>
+            <div class="dct-grid">
+        '''
+        residual_vals = [5, -2, 0, 1, 0, 0, 0, 0, -3, 1, 0, 0, 0, 0, 0, 0] + [0]*48
+        for val in residual_vals:
+            color = 128 + val*10
+            text_color = "#ef4444" if val != 0 else "var(--muted)"
+            html_residual += f'<div class="dct-cell" style="background-color: rgb({color},{color},{color}); color: {text_color}; border:1px solid var(--bg-0);">{val}</div>'
+        html_residual += '</div></div>'
+
+        html_cabac = '''
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div class="rle-pill"><div class="rle-count" style="background:var(--bg-4); color:var(--txt-dim);">Símbolos</div><div class="rle-val" style="color:var(--txt);">0,1,0,0...</div></div>
+            <span style="color:var(--muted); font-size:1.2rem;">➔</span>
+            <div class="rle-pill"><div class="rle-count" style="background:linear-gradient(135deg, var(--amber), #d97706);">Modelo Contexto</div></div>
+            <span style="color:var(--muted); font-size:1.2rem;">➔</span>
+            <div class="rle-pill"><div class="rle-count" style="background:linear-gradient(135deg, var(--green), #059669);">Flujo CABAC</div><div class="rle-val" style="color:var(--green); font-weight:bold;">01101...</div></div>
+        </div>
+        '''
+
         pasos = [
-            {"titulo": "Paso 1 · Partición en Macroblocks", "detalle": "División de cada frame en bloques de 16x16 o variables."},
-            {"titulo": "Paso 2 · Predicción (Motion Estimation)", "detalle": "Cálculo de vectores de movimiento para tramas P y B."},
-            {"titulo": "Paso 3 · DCT y Cuantización", "detalle": "Aplicación de DCT sobre los residuales y reducción de precisión."},
-            {"titulo": "Paso 4 · CABAC", "detalle": "Codificación aritmética adaptiva basada en contexto."}
+            {"titulo": "Paso 1 · Partición en Macroblocks", "detalle": "División de cada frame en bloques de 16x16 o variables.", "html": html_macroblocks},
+            {"titulo": "Paso 2 · Predicción (Motion Estimation)", "detalle": "Cálculo de vectores de movimiento para tramas P y B.", "html": html_motion},
+            {"titulo": "Paso 3 · DCT y Cuantización", "detalle": "Aplicación de DCT sobre los residuales y reducción de precisión.", "html": html_residual},
+            {"titulo": "Paso 4 · CABAC", "detalle": "Codificación aritmética adaptiva basada en contexto.", "html": html_cabac}
         ]
         
         res = ResultadoCompresion(
@@ -867,7 +923,6 @@ def tab_video() -> None:
         
         render_resultado_compresion(res)
         
-        # Custom metrics for video simulation
         c1, c2, c3 = st.columns(3)
         with c1: st.metric("Trama I (Intra)", "3.5:1", "Solo DCT espacial")
         with c2: st.metric("Trama P (Predictiva)", "12.0:1", "DCT + Motion Vector")
