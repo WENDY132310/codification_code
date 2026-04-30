@@ -118,6 +118,7 @@ def inject_css() -> None:
         .info-box { display: flex; gap: 0.9rem; align-items: flex-start; background: rgba(6,182,212,0.06); border: 1px solid rgba(6,182,212,0.22); border-radius: var(--radius-md); padding: 1rem 1.25rem; margin: 0.75rem 0; }
         .info-box.amber { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.22); }
         .info-box.green { background: rgba(16,185,129,0.06); border-color: rgba(16,185,129,0.22); }
+        .info-box.violet { background: rgba(139,92,246,0.06); border-color: rgba(139,92,246,0.22); }
         .info-box .ib-content { font-family: 'IBM Plex Mono', monospace !important; font-size: 0.75rem; color: var(--txt); line-height: 1.7; }
         
         /* VISUALIZACIONES GRÁFICAS (DCT Y RLE) */
@@ -165,7 +166,7 @@ class ResultadoCompresion:
     nombre_algoritmo: str
     datos_originales: bytes
     datos_comprimidos: bytes
-    datos_descomprimidos: bytes  # <--- NUEVO: Almacena el resultado reconstruido
+    datos_descomprimidos: bytes  
     tamaño_original: int
     tamaño_comprimido: int
     tasa_compresion: float    
@@ -173,6 +174,7 @@ class ResultadoCompresion:
     tiempo_ms: float
     pasos: List[Dict[str, Any]] = field(default_factory=list)
     tabla_codigos: Optional[Dict[str, str]] = None
+    tabla_lzw: Optional[List[Dict]] = None
     grafo_dot: Optional[str] = None
     es_stub: bool = True
 
@@ -319,7 +321,6 @@ class CodificadorHuffman:
 
         grafo_dot = self._generar_dot(raiz, len(texto)) if len(freq) <= 60 else None
 
-        # Para modo stub, la reconstrucción simulada es el archivo original
         datos_reconstruidos = self._datos 
 
         return ResultadoCompresion("Huffman", self._datos, comprimido, datos_reconstruidos, len(self._datos), max(1, len(comprimido)), len(self._datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(self._datos)), (time.perf_counter() - t0) * 1000, pasos, codigos, grafo_dot=grafo_dot, es_stub=True)
@@ -360,7 +361,7 @@ class CodificadorLZW:
                 w_dec = entrada
             datos_reconstruidos = "".join(res_desc).encode("utf-8", errors="replace")
 
-        return ResultadoCompresion("LZW", datos, comprimido, datos_reconstruidos, len(datos), max(1, len(comprimido)), len(datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(datos)), (time.perf_counter() - t0) * 1000, [{"titulo": "Matching en Diccionario", "detalle": "Completado"}], es_stub=False)
+        return ResultadoCompresion("LZW", datos, comprimido, datos_reconstruidos, len(datos), max(1, len(comprimido)), len(datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(datos)), (time.perf_counter() - t0) * 1000, [{"titulo": "Matching en Diccionario", "detalle": "Codificación y decodificación LZW ejecutada."}], es_stub=False)
 
 # ─── C. RLE ───────────────────────────────────────────────────────────────────
 class CodificadorRLE:
@@ -428,7 +429,6 @@ class CodificadorDCT:
         theo_ratio = max(0.05, 1 - (calidad / 100) * 0.92)
         comp = max(1, int(orig * theo_ratio))
         
-        # Stub decompression = return original
         datos_reconstruidos = datos
 
         pasos = [{"titulo": "Partición en Bloques", "detalle": "Bloque extraído en 8x8:", "html": html_dct}]
@@ -546,6 +546,26 @@ def dct2(bloque: np.ndarray) -> np.ndarray:
             F[u,v] = (2/N)*cu*cv*np.sum(b * cos_u[:,None] * cos_v[None,:])
     return F
 """,
+    "H.264 / HEVC (Simulado)": """\
+# Estimación de Movimiento (Motion Estimation)
+# SAD(mv) = ΣΣ |frame_curr(x,y) - frame_ref(x+mvx, y+mvy)|
+
+def motion_estimation(frame_ref, frame_curr, block_size=16):
+    motion_vectors = []
+    for i in range(0, frame_curr.shape[0], block_size):
+        for j in range(0, frame_curr.shape[1], block_size):
+            curr_block = frame_curr[i:i+block_size, j:j+block_size]
+            best_sad, best_mv = float('inf'), (0, 0)
+            for dy in range(-16, 17):
+                for dx in range(-16, 17):
+                    # Búsqueda en ventana ±16
+                    ref_block = frame_ref[i+dy:..., j+dx:...]
+                    sad = np.sum(np.abs(curr_block - ref_block))
+                    if sad < best_sad:
+                        best_sad, best_mv = sad, (dx, dy)
+            motion_vectors.append(best_mv)
+    return motion_vectors
+""",
     "μ-Law G.711": """\
 # Companding Logarítmico μ-Law
 # y = sgn(x) * ln(1 + μ|x|) / ln(1 + μ)
@@ -576,7 +596,7 @@ def fmt_bytes(n: int) -> str:
     return f"{n/1024**2:.2f} MB"
 
 def render_header() -> None:
-    st.markdown('<div class="app-header-wrap"><div class="app-header"><div class="header-left"><div class="header-icon">⚡</div><div><p class="app-title">DataLab · Compresión</p><p class="app-subtitle">Shannon · Huffman · LZW · RLE · DCT · μ-Law · ADPCM</p></div></div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-header-wrap"><div class="app-header"><div class="header-left"><div class="header-icon">⚡</div><div><p class="app-title">DataLab · Compresión</p><p class="app-subtitle">Shannon · Huffman · LZW · RLE · DCT · μ-Law · ADPCM · H.264</p></div></div></div></div>', unsafe_allow_html=True)
 
 def section_label(icon: str, text: str) -> None:
     st.markdown(f'<div class="section-label"><span class="sl-icon">{icon}</span><span class="sl-text">{text}</span></div>', unsafe_allow_html=True)
@@ -591,7 +611,6 @@ def render_dashboard(stats: EstadisticasInfo) -> None:
     with c3: st.metric("Eficiencia η", f"{stats.eficiencia * 100:.2f}%", f"Redundancia {stats.redundancia*100:.2f}%")
     with c4: st.metric("Alfabeto", f"{stats.simbolos_unicos}", f"de {stats.total_simbolos:,} símbolos")
 
-# ── NUEVO: MOSTRAR EL CÓDIGO Y LAS FÓRMULAS EXPLÍCITAMENTE ──
 def render_codigo_y_formulas(algo: str, stats: EstadisticasInfo) -> None:
     section_label("📜", f"CÓDIGO Y FÓRMULAS — {algo}")
     info_box("🧮", f"<strong>Entropía Matemática:</strong> $H(X) = -\sum p(x_i) \cdot \log_2 p(x_i)$<br>Límite teórico calculado: <strong>{stats.entropia:.4f} bits/símbolo</strong>", "amber")
@@ -621,7 +640,6 @@ def render_arbol_huffman(res: ResultadoCompresion) -> None:
         info_box("💡", "Árbol horizontal (Derecha a Izquierda) con probabilidades y etiquetas de bit.")
         st.graphviz_chart(res.grafo_dot)
 
-# ── NUEVO: SECCIÓN DE DESCODIFICACIÓN / RECONSTRUCCIÓN ──
 def render_descodificacion(res: ResultadoCompresion, tipo_dato: str) -> None:
     section_label("🔄", "DESCODIFICACIÓN Y RECONSTRUCCIÓN")
     
@@ -649,19 +667,22 @@ def render_descodificacion(res: ResultadoCompresion, tipo_dato: str) -> None:
     elif tipo_dato == "audio":
         st.markdown("**Audio Reconstruido**")
         if res.nombre_algoritmo == "μ-Law":
-            # Para que st.audio lo reproduzca, necesitamos reconstruir la cabecera WAV
             try:
                 buf = io.BytesIO()
                 with wave.open(buf, 'wb') as wf:
-                    wf.setnchannels(1) # Asumimos mono por simplicidad del codec
-                    wf.setsampwidth(2) # 16-bit PCM reconstruido
-                    wf.setframerate(44100) # Framerate default
+                    wf.setnchannels(1) 
+                    wf.setsampwidth(2) 
+                    wf.setframerate(44100) 
                     wf.writeframes(res.datos_descomprimidos)
                 st.audio(buf.getvalue(), format="audio/wav")
             except Exception:
-                st.info("Formato de audio no reproducible directamente en el navegador, pero los bytes fueron reconstruidos exitosamente.")
+                st.info("Formato de audio no reproducible directamente, pero los bytes fueron reconstruidos exitosamente.")
         else:
             st.audio(res.datos_descomprimidos)
+            
+    elif tipo_dato == "video":
+        st.markdown("**Video Reconstruido**")
+        st.video(res.datos_descomprimidos)
 
 def render_no_file(icon: str, texto: str, subtexto: str) -> None:
     st.markdown(f'<div class="no-file-state"><div class="nfs-icon">{icon}</div><div class="nfs-title">{texto}</div><div class="nfs-sub">{subtexto}</div></div>', unsafe_allow_html=True)
@@ -695,7 +716,7 @@ def tab_texto() -> None:
     with c_btn: btn_comp = st.button("▶ Comprimir", key="btn_texto")
 
     if btn_comp:
-        render_codigo_y_formulas(algo, stats) # <--- CÓDIGO Y FÓRMULAS VISIBLES AHORA
+        render_codigo_y_formulas(algo, stats) 
         
         if algo == "Huffman": res = CodificadorHuffman(datos).comprimir()
         elif algo == "LZW": res = CodificadorLZW().comprimir(datos)
@@ -704,7 +725,7 @@ def tab_texto() -> None:
         render_resultado_compresion(res)
         render_pasos(res.pasos)
         render_arbol_huffman(res)
-        render_descodificacion(res, "texto") # <--- DESCODIFICACIÓN MOSTRADA AQUÍ
+        render_descodificacion(res, "texto") 
 
 
 def tab_imagen() -> None:
@@ -733,7 +754,10 @@ def tab_imagen() -> None:
     with c_btn: comprimir = st.button("▶ Comprimir", key="btn_img")
 
     if comprimir:
-        render_codigo_y_formulas(algo_img, stats)
+        if algo_img == "Huffman (bytes)": algo_llave = "Huffman"
+        else: algo_llave = algo_img
+
+        render_codigo_y_formulas(algo_llave, stats)
         
         if algo_img == "DCT — JPEG-like": res = CodificadorDCT().comprimir(datos)
         elif algo_img == "RLE": res = CodificadorRLE().comprimir(datos)
@@ -745,8 +769,18 @@ def tab_imagen() -> None:
         render_descodificacion(res, "imagen")
 
 def tab_audio() -> None:
-    uploaded = st.file_uploader("Sube audio (.wav)", type=["wav"], key="uploader_audio")
-    if not uploaded: return
+    col_up, col_info = st.columns([3, 2], gap="large")
+    with col_up:
+        section_label("🎵", "CARGAR ARCHIVO DE AUDIO")
+        uploaded = st.file_uploader("Sube audio (.wav)", type=["wav"], key="uploader_audio")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS")
+        st.info("μ-Law G.711 · ADPCM · Huffman")
+
+    if not uploaded:
+        render_no_file("🎵", "Sube un archivo de audio", ".wav")
+        return
+        
     datos = uploaded.read()
     st.audio(datos)
     
@@ -754,9 +788,16 @@ def tab_audio() -> None:
     stats = analizador.calcular_todo()
     render_dashboard(stats)
     
-    algo = st.selectbox("Algoritmo", ["μ-Law G.711", "ADPCM", "Huffman (bytes)"], key="algo_audio")
-    if st.button("▶ Comprimir", key="btn_audio"):
-        render_codigo_y_formulas(algo, stats)
+    section_label("⚙️", "ALGORITMO DE COMPRESIÓN")
+    c_sel, c_btn = st.columns([3, 1])
+    with c_sel: algo = st.selectbox("Algoritmo", ["μ-Law G.711", "ADPCM", "Huffman (bytes)"], key="algo_audio", label_visibility="collapsed")
+    with c_btn: btn_comp = st.button("▶ Comprimir", key="btn_audio")
+    
+    if btn_comp:
+        if algo == "Huffman (bytes)": algo_llave = "Huffman"
+        else: algo_llave = algo
+
+        render_codigo_y_formulas(algo_llave, stats)
         
         if algo == "μ-Law G.711": res = CodificadorMuLaw().comprimir(datos)
         elif algo == "ADPCM": res = CodificadorADPCM().comprimir(datos)
@@ -768,7 +809,72 @@ def tab_audio() -> None:
         render_descodificacion(res, "audio")
 
 def tab_video() -> None:
-    st.info("Pestaña de Video lista. Para algoritmos de contenedor usa el flujo estándar.")
+    col_up, col_info = st.columns([3, 2], gap="large")
+    with col_up:
+        section_label("🎬", "CARGAR ARCHIVO DE VIDEO")
+        uploaded = st.file_uploader("Sube un archivo de video", type=["mp4", "avi", "mkv", "mov", "webm"], key="uploader_video")
+    with col_info:
+        section_label("ℹ️", "CONCEPTOS APLICADOS")
+        st.info("Tramas I/P/B · DCT Temporal · Entropía CABAC")
+
+    if uploaded is None:
+        render_no_file("🎬", "Sube un archivo de video", ".mp4 .avi .mkv .mov .webm")
+        return
+
+    datos = uploaded.read()
+    st.video(datos)
+    
+    analizador = AnalizadorVideo(datos, uploaded.name)
+    with st.spinner("Analizando flujo de bytes de video..."):
+        stats = analizador.calcular_todo()
+
+    render_dashboard(stats)
+    info_box("🔬", f"El flujo de video comprimido (H.264/HEVC) tiene entropía alta (<strong>{stats.entropia:.4f} bits/byte</strong>) porque los datos ya están codificados entrópicamente. Un video RAW tendría entropía menor y sería más compresible.", "violet")
+
+    section_label("⚙️", "ALGORITMO DE COMPRESIÓN")
+    c_sel, c_btn = st.columns([3, 1])
+    with c_sel:
+        algo_vid = st.selectbox("Simulación", ["H.264 / HEVC (Simulado)"], key="algo_video", label_visibility="collapsed")
+    with c_btn:
+        btn_comp = st.button("▶ Simular Compresión", key="btn_video")
+
+    if btn_comp:
+        render_codigo_y_formulas(algo_vid, stats)
+        
+        # Simulated result for video
+        orig = len(datos) * 45  
+        comp = len(datos)
+        pasos = [
+            {"titulo": "Paso 1 · Partición en Macroblocks", "detalle": "División de cada frame en bloques de 16x16 o variables."},
+            {"titulo": "Paso 2 · Predicción (Motion Estimation)", "detalle": "Cálculo de vectores de movimiento para tramas P y B."},
+            {"titulo": "Paso 3 · DCT y Cuantización", "detalle": "Aplicación de DCT sobre los residuales y reducción de precisión."},
+            {"titulo": "Paso 4 · CABAC", "detalle": "Codificación aritmética adaptiva basada en contexto."}
+        ]
+        
+        res = ResultadoCompresion(
+            nombre_algoritmo="H.264 (Simulado)",
+            datos_originales=datos,
+            datos_comprimidos=datos,
+            datos_descomprimidos=datos,
+            tamaño_original=orig,
+            tamaño_comprimido=comp,
+            tasa_compresion=orig / comp,
+            ratio_reduccion=1 - (comp / orig),
+            tiempo_ms=125.4,
+            pasos=pasos,
+            es_stub=True
+        )
+        
+        render_resultado_compresion(res)
+        
+        # Custom metrics for video simulation
+        c1, c2, c3 = st.columns(3)
+        with c1: st.metric("Trama I (Intra)", "3.5:1", "Solo DCT espacial")
+        with c2: st.metric("Trama P (Predictiva)", "12.0:1", "DCT + Motion Vector")
+        with c3: st.metric("Trama B (Bidireccional)", "20.0:1", "Máxima compresión")
+
+        render_pasos(res.pasos)
+        render_descodificacion(res, "video")
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  MAIN APP
