@@ -434,21 +434,48 @@ class CodificadorDCT:
         
         datos_reconstruidos = datos
 
-        # ADICIÓN: Detalle de descompresión de imagen
+        # ADICIÓN PROCEDIMENTAL: Descompresión de imagen visual (IDCT Grids)
         html_idct = '''
-        <div style="display:flex; flex-direction:column; align-items:flex-start; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
-            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:0.5rem;">DESCOMPRESIÓN: IDCT (Transformada Inversa)</div>
-            <ul style="font-size:0.8rem; color:var(--txt-dim); line-height:1.6;">
-                <li><b>1. Descuantización:</b> Se multiplican los coeficientes guardados por la matriz de cuantización original.</li>
-                <li><b>2. IDCT-2D:</b> Se aplica la suma ponderada de cosenos para recuperar los valores de los píxeles espaciales desde el dominio de la frecuencia.</li>
-                <li><b>3. Shift de Nivel:</b> Se suma +128 al resultado para devolver los valores al rango visual estándar [0, 255].</li>
-            </ul>
+        <div style="display:flex; flex-direction:column; gap: 15px; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); text-align:center;">DESCOMPRESIÓN: IDCT (Transformada Inversa)</div>
+            
+            <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap: 20px;">
+                <div style="display:flex; flex-direction:column; align-items:center;">
+                    <div style="font-family:'IBM Plex Mono', monospace; font-size:0.6rem; color:var(--muted); margin-bottom:8px;">1. MATRIZ FRECUENCIAS</div>
+                    <div class="dct-grid" style="width:140px; background:var(--bg-2); border:1px solid var(--border);">
+        '''
+        # Generar grilla cuantizada visual (muchos ceros)
+        for i in range(64):
+            val = 35 if i==0 else (-12 if i==1 else (8 if i==8 else 0))
+            text_color = "#ef4444" if val != 0 else "rgba(139,156,181,0.2)"
+            html_idct += f'<div class="dct-cell" style="background:var(--bg-0); color:{text_color}; font-size:0.55rem;">{val}</div>'
+            
+        html_idct += '''
+                    </div>
+                </div>
+                
+                <span style="color:var(--cyan); font-size:1.5rem; font-weight:bold;">➔</span>
+                
+                <div style="display:flex; flex-direction:column; align-items:center;">
+                    <div style="font-family:'IBM Plex Mono', monospace; font-size:0.6rem; color:var(--muted); margin-bottom:8px;">2. BLOQUE RECONSTRUIDO</div>
+                    <div class="dct-grid" style="width:140px; background:var(--bg-2); border:1px solid var(--border);">
+        '''
+        # Generar grilla reconstruida (basada en el raw)
+        for val in raw[:64]:
+            color = max(0, min(255, int(val)))
+            html_idct += f'<div class="dct-cell" style="background-color: rgb({color},{color},{color}); color: transparent;">0</div>'
+            
+        html_idct += '''
+                    </div>
+                </div>
+            </div>
+            <div style="font-size:0.7rem; color:var(--txt-dim); text-align:center; font-style:italic; margin-top:5px;">El decodificador lee los coeficientes espaciados y aplica la suma de cosenos 2D para redibujar los píxeles.</div>
         </div>
         '''
 
         pasos = [
             {"titulo": "Paso 1 · Partición en Bloques y Transformada", "detalle": "El algoritmo extrae bloques de 8x8 píxeles y aplica la DCT para pasarlos al dominio de frecuencia.", "html": html_dct},
-            {"titulo": "Paso 2 · Proceso de Descompresión (Reconstrucción)", "detalle": "Matemática inversa ejecutada para volver a graficar la imagen.", "html": html_idct}
+            {"titulo": "Paso 2 · Proceso de Descompresión (Reconstrucción IDCT)", "detalle": "Transformación visual de frecuencias a bloque espacial.", "html": html_idct}
         ]
         return ResultadoCompresion("DCT", datos, bytes(comp), datos_reconstruidos, orig, comp, orig / comp, 1 - (comp / orig), (time.perf_counter() - t0) * 1000, pasos, es_stub=True)
 
@@ -481,7 +508,6 @@ class CodificadorMuLaw:
             decoded.append(val)
         datos_reconstruidos = struct.pack(f"<{len(decoded)}h", *decoded)
 
-        # ADICIÓN: Pasos para Mu-Law (Audio)
         pasos = [
             {"titulo": "Paso 1 · Cuantización Logarítmica (Companding)", "detalle": "Se aplica la fórmula a cada muestra de audio de 16-bit para reducirla y empaquetarla en solo 8-bit, dando prioridad de resolución a las amplitudes bajas (silencios/susurros)."},
             {"titulo": "Paso 2 · Descompresión (Expansión)", "detalle": "Se invierte la curva logarítmica bit a bit para reconstruir la onda de audio (este algoritmo genera una ligerísima pérdida de precisión inaudible)."}
@@ -497,7 +523,7 @@ class CodificadorADPCM:
         # Desempaquetar el audio WAV asumiendo PCM de 16 bits
         samples = struct.unpack(f"<{n_samples}h", datos[: n_samples * 2])
         
-        # ADICIÓN: Implementación Real Simplificada de DPCM/ADPCM para mostrar el proceso
+        # Implementación Real Simplificada de DPCM/ADPCM
         encoded = bytearray()
         decoded = []
         prev_sample = 0
@@ -957,17 +983,46 @@ def tab_video() -> None:
         </div>
         '''
 
-        # ADICIÓN: Detalle completo de descompresión de Video
+        # ADICIÓN PROCEDIMENTAL: Pipeline Visual de Descompresión de Video
         html_videodec = '''
-        <div style="display:flex; flex-direction:column; align-items:flex-start; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
-            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:0.5rem;">PROCESO DE DESCOMPRESIÓN Y REPRODUCCIÓN</div>
-            <ul style="font-size:0.8rem; color:var(--txt); line-height:1.6;">
-                <li><b>1. Decodificación Entrópica:</b> El reproductor invierte el flujo CABAC para obtener los coeficientes cuantizados y los vectores de movimiento crudos.</li>
-                <li><b>2. IDCT del Residual:</b> Se reconstruye el bloque de "errores" (las diferencias finas que la predicción no logró captar).</li>
-                <li><b>3. Compensación de Movimiento:</b> El reproductor busca el frame anterior en su memoria buffer (t-1) y desplaza los píxeles según le indique el vector de movimiento.</li>
-                <li><b>4. Fusión de Trama:</b> Suma el bloque desplazado con el residual (error) calculado en el paso 2 para generar el frame final (t).</li>
-                <li><b>5. Filtro In-Loop (Deblocking):</b> Suaviza los bordes de los bloques de 16x16 para que tu ojo no note el clásico "pixelado" de compresión antes de mostrarlo en pantalla.</li>
-            </ul>
+        <div style="display:flex; flex-direction:column; gap: 15px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); text-align:center;">PIPELINE DE DESCOMPRESIÓN (PLAYBACK)</div>
+            
+            <div style="display:flex; align-items:center; justify-content:center; gap: 10px;">
+                <div class="rle-pill"><div class="rle-count" style="background:var(--green);">Flujo CABAC</div><div class="rle-val">01101...</div></div>
+                <span style="color:var(--muted); font-size:1.2rem;">➔</span>
+                <div class="rle-pill"><div class="rle-count" style="background:var(--amber);">Descodificador</div></div>
+                <span style="color:var(--muted); font-size:1.2rem;">➔</span>
+                <div class="rle-pill"><div class="rle-count" style="background:var(--bg-4);">Coeficientes</div><div class="rle-val">5, -2, 0...</div></div>
+            </div>
+
+            <div style="display:flex; align-items:center; justify-content:center; gap: 10px;">
+                <div style="border:1px solid var(--border); padding:5px; border-radius:4px; font-size:0.6rem; text-align:center;">Matriz<br>Frecuencias</div>
+                <span style="color:var(--muted); font-size:1.2rem;">➔</span>
+                <div class="rle-pill"><div class="rle-count" style="background:var(--cyan); color:black;">IDCT Inversa</div></div>
+                <span style="color:var(--muted); font-size:1.2rem;">➔</span>
+                <div style="border:1px solid var(--border); padding:5px; border-radius:4px; font-size:0.6rem; text-align:center; color:#ef4444;">Residual<br>Espacial (Error)</div>
+            </div>
+
+            <div style="display:flex; align-items:center; justify-content:center; gap: 10px; margin-top:10px;">
+                <div style="text-align:center;">
+                    <div style="width:50px; height:50px; border:1px dashed var(--muted); background:var(--bg-2); position:relative;">
+                         <div style="width:15px; height:15px; background:var(--violet); position:absolute; top:5px; left:5px;"></div>
+                    </div>
+                    <div style="font-size:0.5rem; color:var(--muted); margin-top:4px;">Frame(t-1)<br>+ Vect. Mov</div>
+                </div>
+                <span style="color:var(--muted); font-size:1.5rem; font-weight:bold;">+</span>
+                <div style="text-align:center;">
+                    <div style="width:50px; height:50px; border:1px solid var(--border-strong); background:rgba(239,68,68,0.1); display:flex; align-items:center; justify-content:center; color:#ef4444; font-size:0.6rem;">Residual</div>
+                </div>
+                <span style="color:var(--muted); font-size:1.5rem; font-weight:bold;">=</span>
+                <div style="text-align:center;">
+                    <div style="width:50px; height:50px; border:1px solid var(--cyan); background:var(--bg-2); position:relative;">
+                         <div style="width:15px; height:15px; background:var(--cyan); position:absolute; top:15px; left:20px;"></div>
+                    </div>
+                    <div style="font-size:0.5rem; color:var(--cyan); margin-top:4px;">Frame(t)<br>Reconstruido</div>
+                </div>
+            </div>
         </div>
         '''
 
@@ -976,7 +1031,7 @@ def tab_video() -> None:
             {"titulo": "Paso 2 · Predicción (Motion Estimation)", "detalle": "Cálculo de vectores de movimiento para tramas P y B.", "html": html_motion},
             {"titulo": "Paso 3 · DCT y Cuantización", "detalle": "Aplicación de DCT sobre los residuales y reducción de precisión.", "html": html_residual},
             {"titulo": "Paso 4 · CABAC", "detalle": "Codificación aritmética adaptiva basada en contexto.", "html": html_cabac},
-            {"titulo": "Paso 5 · Proceso de Descompresión (Playback)", "detalle": "Secuencia de pasos para reconstruir el video en el reproductor a 60FPS.", "html": html_videodec}
+            {"titulo": "Paso 5 · Proceso de Descompresión (Playback)", "detalle": "Secuencia visual para reconstruir el video en tiempo real.", "html": html_videodec}
         ]
         
         res = ResultadoCompresion(
