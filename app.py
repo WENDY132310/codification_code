@@ -316,9 +316,34 @@ class CodificadorHuffman:
 
         tabla_frec = [{"Símbolo": repr(k), "Frecuencia": v} for k, v in sorted(freq.items(), key=lambda x: -x[1])]
 
+        # HTML DE DECODIFICACIÓN (Procedimiento Visual en una línea)
+        html_huffman_dec = (
+            '<div style="display:flex; flex-direction:column; gap: 15px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); text-align:center;">PIPELINE DE DECODIFICACIÓN HUFFMAN</div>'
+            '<div style="display:flex; align-items:center; justify-content:center; gap: 15px;">'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div class="rle-pill"><div class="rle-count" style="background:#ef4444;">Bitstream</div><div class="rle-val">1 0 1 1...</div></div>'
+            '<div style="font-size:0.6rem; color:var(--muted); margin-top:5px;">Entrada Comprimida</div>'
+            '</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '<div style="border:1px solid var(--border); padding:15px; border-radius:8px; text-align:center; background:var(--bg-2);">'
+            '<div style="font-size:0.65rem; color:var(--cyan); margin-bottom:8px; font-family:\'IBM Plex Mono\', monospace;">NAVEGACIÓN DEL ÁRBOL</div>'
+            '<div style="font-size:0.75rem; color:var(--txt);">Raíz ➔ (0)Izq ➔ (1)Der ➔ <b>Hoja</b></div>'
+            '</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div class="rle-pill"><div class="rle-count" style="background:var(--green);">Símbolo</div><div class="rle-val" style="color:var(--txt); font-weight:bold;">Original</div></div>'
+            '<div style="font-size:0.6rem; color:var(--muted); margin-top:5px;">Salida Recuperada</div>'
+            '</div>'
+            '</div>'
+            '<div style="font-size:0.7rem; color:var(--txt-dim); text-align:center; font-style:italic; margin-top:5px;">El decodificador lee los bits secuencialmente y recorre el árbol prefijo construido. Al llegar a una hoja, recupera la información exacta y vuelve a la raíz.</div>'
+            '</div>'
+        )
+
         pasos = [
             {"titulo": "Paso 1 · Frecuencias y Repeticiones", "detalle": "", "tabla": tabla_frec[:150]},
             {"titulo": "Paso 2 · Construcción del Árbol", "detalle": "Fusión Bottom-Up usando Min-Heap."},
+            {"titulo": "Paso 3 · Procedimiento de Decodificación", "detalle": "", "html": html_huffman_dec}
         ]
 
         grafo_dot = self._generar_dot(raiz, len(texto)) if len(freq) <= 60 else None
@@ -775,7 +800,7 @@ def render_resultado_compresion(res: ResultadoCompresion) -> None:
 def render_pasos(pasos: List[Dict[str, Any]]) -> None:
     section_label("🔍", "PROCEDIMIENTO PASO A PASO")
     for i, paso in enumerate(pasos, 1):
-        with st.expander(paso.get("titulo", f"Paso {i}"), expanded=(i <= 2)):
+        with st.expander(paso.get("titulo", f"Paso {i}"), expanded=(i <= 3)):
             if paso.get("detalle"): st.markdown(f"<div style='font-size:0.8rem;color:var(--txt-dim);margin-bottom:10px;white-space:pre-wrap'>{paso['detalle']}</div>", unsafe_allow_html=True)
             if paso.get("html"): st.markdown(paso["html"], unsafe_allow_html=True)
             elif paso.get("tabla"): st.dataframe(pd.DataFrame(paso["tabla"]), use_container_width=True, height=250)
@@ -992,7 +1017,6 @@ def tab_video() -> None:
         orig = len(datos) * 45  
         comp = len(datos)
         
-        # HTML NATIVO PARA PASOS DE VIDEO (STRING DE UNA LÍNEA PARA EVITAR BUGS DE STREAMLIT)
         html_macroblocks = (
             '<div style="display:flex; flex-direction:column; align-items:center; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
             '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:1rem;">FRAME DIVIDIDO EN MACROBLOCKS</div>'
