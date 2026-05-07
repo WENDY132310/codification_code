@@ -539,8 +539,18 @@ class CodificadorMuLaw:
 
     def comprimir(self, datos: bytes) -> ResultadoCompresion:
         t0 = time.perf_counter()
-        n_samples = len(datos) // 2
-        samples = struct.unpack(f"<{n_samples}h", datos[: n_samples * 2])
+        
+        # PARSE WAV HEADER TO AVOID TIMING ISSUES
+        try:
+            with wave.open(io.BytesIO(datos), 'rb') as wf:
+                params = wf.getparams()
+                raw_audio = wf.readframes(params.nframes)
+        except Exception:
+            params = None
+            raw_audio = datos
+
+        n_samples = len(raw_audio) // 2
+        samples = struct.unpack(f"<{n_samples}h", raw_audio[: n_samples * 2])
         encoded = bytes(self._encode_sample(s) for s in samples)
 
         # ── REAL MU-LAW DECOMPRESSION ──
@@ -562,7 +572,17 @@ class CodificadorMuLaw:
                     "PCM 16-bit Reconstruido": val
                 })
 
-        datos_reconstruidos = struct.pack(f"<{len(decoded)}h", *decoded)
+        datos_reconstruidos_raw = struct.pack(f"<{len(decoded)}h", *decoded)
+
+        # RECONSTRUCT VALID WAV
+        if params:
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setparams(params)
+                wf.writeframes(datos_reconstruidos_raw)
+            datos_reconstruidos = buf.getvalue()
+        else:
+            datos_reconstruidos = datos_reconstruidos_raw
 
         # HTML VISUAL PARA MU-LAW
         html_mulaw_comp = (
@@ -613,8 +633,18 @@ class CodificadorMuLaw:
 class CodificadorADPCM:
     def comprimir(self, datos: bytes) -> ResultadoCompresion:
         t0 = time.perf_counter()
-        n_samples = len(datos) // 2
-        samples = struct.unpack(f"<{n_samples}h", datos[: n_samples * 2])
+
+        # PARSE WAV HEADER TO AVOID TIMING ISSUES
+        try:
+            with wave.open(io.BytesIO(datos), 'rb') as wf:
+                params = wf.getparams()
+                raw_audio = wf.readframes(params.nframes)
+        except Exception:
+            params = None
+            raw_audio = datos
+
+        n_samples = len(raw_audio) // 2
+        samples = struct.unpack(f"<{n_samples}h", raw_audio[: n_samples * 2])
         
         encoded = bytearray()
         decoded = []
@@ -639,7 +669,17 @@ class CodificadorADPCM:
                     "Salida al Parlante": prev_sample
                 })
 
-        datos_reconstruidos = struct.pack(f"<{len(decoded)}h", *decoded)
+        datos_reconstruidos_raw = struct.pack(f"<{len(decoded)}h", *decoded)
+
+        # RECONSTRUCT VALID WAV
+        if params:
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setparams(params)
+                wf.writeframes(datos_reconstruidos_raw)
+            datos_reconstruidos = buf.getvalue()
+        else:
+            datos_reconstruidos = datos_reconstruidos_raw
 
         # HTML VISUAL PARA ADPCM 
         html_adpcm_diff = (
@@ -890,19 +930,7 @@ def render_descodificacion(res: ResultadoCompresion, tipo_dato: str) -> None:
             
     elif tipo_dato == "audio":
         st.markdown("**Audio Reconstruido**")
-        if res.nombre_algoritmo == "μ-Law":
-            try:
-                buf = io.BytesIO()
-                with wave.open(buf, 'wb') as wf:
-                    wf.setnchannels(1) 
-                    wf.setsampwidth(2) 
-                    wf.setframerate(44100) 
-                    wf.writeframes(res.datos_descomprimidos)
-                st.audio(buf.getvalue(), format="audio/wav")
-            except Exception:
-                st.info("Formato de audio no reproducible directamente, pero los bytes fueron reconstruidos exitosamente.")
-        else:
-            st.audio(res.datos_descomprimidos)
+        st.audio(res.datos_descomprimidos)
             
     elif tipo_dato == "video":
         st.markdown("**Video Reconstruido**")
@@ -1162,7 +1190,6 @@ def tab_video() -> None:
             '</div>'
         )
 
-        # JSON DE DECODIFICACION (DATOS CRADOS DEL MACROBLOCK)
         json_macroblock_dec = {
             "estado": "Decodificación Finalizada",
             "metadata_macroblock": {
