@@ -153,7 +153,7 @@ def inject_css() -> None:
 class EstadisticasInfo:
     frecuencias: Dict[str, int]
     probabilidades: Dict[str, float]
-    entropia: float           
+    entropia: float            
     longitud_promedio: float  
     eficiencia: float         
     redundancia: float        
@@ -274,7 +274,7 @@ class CodificadorHuffman:
         if not nodo: return ""
         lineas = [
             "digraph Huffman {",
-            "    rankdir=RL;",           # Dibuja de Derecha a Izquierda
+            "    rankdir=RL;",            # Dibuja de Derecha a Izquierda
             "    bgcolor=\"transparent\";",
             "    node [fontname=\"monospace\", style=\"filled\", fillcolor=\"#1e293b\", fontcolor=\"#cdd9e5\", color=\"#06b6d4\"];",
             "    edge [fontname=\"monospace\", fontcolor=\"#ef4444\", color=\"#8b9cb5\", fontsize=10];"
@@ -314,9 +314,12 @@ class CodificadorHuffman:
         total_bits = sum(len(codigos.get(c, "?")) for c in texto)
         comprimido = bytes(math.ceil(total_bits / 8)) 
 
+        # ADICIÓN: Generar la tabla de frecuencias para la interfaz
+        tabla_frec = [{"Símbolo": repr(k), "Frecuencia": v} for k, v in sorted(freq.items(), key=lambda x: -x[1])]
+
         pasos = [
-            {"titulo": "Paso 1 · Frecuencias", "detalle": f"Símbolos únicos: {len(freq)}"},
-            {"titulo": "Paso 2 · Construcción del Árbol", "detalle": "Fusión Bottom-Up usando Min-Heap."},
+            {"titulo": "Paso 1 · Frecuencias y Repeticiones", "detalle": f"Símbolos únicos analizados: {len(freq)}\nSe ordenan de mayor a menor frecuencia de aparición.", "tabla": tabla_frec[:150]},
+            {"titulo": "Paso 2 · Construcción del Árbol", "detalle": "Fusión Bottom-Up usando Min-Heap. Los símbolos más frecuentes quedan cerca de la raíz."},
         ]
 
         grafo_dot = self._generar_dot(raiz, len(texto)) if len(freq) <= 60 else None
@@ -431,7 +434,22 @@ class CodificadorDCT:
         
         datos_reconstruidos = datos
 
-        pasos = [{"titulo": "Partición en Bloques", "detalle": "Bloque extraído en 8x8:", "html": html_dct}]
+        # ADICIÓN: Detalle de descompresión de imagen
+        html_idct = '''
+        <div style="display:flex; flex-direction:column; align-items:flex-start; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:0.5rem;">DESCOMPRESIÓN: IDCT (Transformada Inversa)</div>
+            <ul style="font-size:0.8rem; color:var(--txt-dim); line-height:1.6;">
+                <li><b>1. Descuantización:</b> Se multiplican los coeficientes guardados por la matriz de cuantización original.</li>
+                <li><b>2. IDCT-2D:</b> Se aplica la suma ponderada de cosenos para recuperar los valores de los píxeles espaciales desde el dominio de la frecuencia.</li>
+                <li><b>3. Shift de Nivel:</b> Se suma +128 al resultado para devolver los valores al rango visual estándar [0, 255].</li>
+            </ul>
+        </div>
+        '''
+
+        pasos = [
+            {"titulo": "Paso 1 · Partición en Bloques y Transformada", "detalle": "El algoritmo extrae bloques de 8x8 píxeles y aplica la DCT para pasarlos al dominio de frecuencia.", "html": html_dct},
+            {"titulo": "Paso 2 · Proceso de Descompresión (Reconstrucción)", "detalle": "Matemática inversa ejecutada para volver a graficar la imagen.", "html": html_idct}
+        ]
         return ResultadoCompresion("DCT", datos, bytes(comp), datos_reconstruidos, orig, comp, orig / comp, 1 - (comp / orig), (time.perf_counter() - t0) * 1000, pasos, es_stub=True)
 
 # ─── E. μ-Law (Audio) & F. ADPCM ──────────────────────────────────────────────
@@ -463,13 +481,52 @@ class CodificadorMuLaw:
             decoded.append(val)
         datos_reconstruidos = struct.pack(f"<{len(decoded)}h", *decoded)
 
+        # ADICIÓN: Pasos para Mu-Law (Audio)
+        pasos = [
+            {"titulo": "Paso 1 · Cuantización Logarítmica (Companding)", "detalle": "Se aplica la fórmula a cada muestra de audio de 16-bit para reducirla y empaquetarla en solo 8-bit, dando prioridad de resolución a las amplitudes bajas (silencios/susurros)."},
+            {"titulo": "Paso 2 · Descompresión (Expansión)", "detalle": "Se invierte la curva logarítmica bit a bit para reconstruir la onda de audio (este algoritmo genera una ligerísima pérdida de precisión inaudible)."}
+        ]
+
         t1 = time.perf_counter()
-        return ResultadoCompresion("μ-Law", datos, encoded, datos_reconstruidos, len(datos), len(encoded), 2.0, 0.5, (t1-t0)*1000, [{"titulo": "G.711", "detalle": "Companding logarítmico aplicado."}], es_stub=False)
+        return ResultadoCompresion("μ-Law", datos, encoded, datos_reconstruidos, len(datos), len(encoded), 2.0, 0.5, (t1-t0)*1000, pasos, es_stub=False)
 
 class CodificadorADPCM:
     def comprimir(self, datos: bytes) -> ResultadoCompresion:
-        comp_len = max(1, len(datos)//4)
-        return ResultadoCompresion("ADPCM", datos, bytes(comp_len), datos, len(datos), comp_len, 4.0, 0.75, 1.0, [{"titulo": "IMA ADPCM", "detalle": "Stub", "tabla": None}], es_stub=True)
+        t0 = time.perf_counter()
+        n_samples = len(datos) // 2
+        # Desempaquetar el audio WAV asumiendo PCM de 16 bits
+        samples = struct.unpack(f"<{n_samples}h", datos[: n_samples * 2])
+        
+        # ADICIÓN: Implementación Real Simplificada de DPCM/ADPCM para mostrar el proceso
+        encoded = bytearray()
+        decoded = []
+        prev_sample = 0
+        
+        for s in samples:
+            # Paso 1: Diferencia
+            diff = s - prev_sample
+            
+            # Paso 2: Cuantización (Reducir la diferencia para que quepa en 8 bits)
+            step = 256
+            quantized_diff = max(-128, min(127, diff // step))
+            encoded.append(quantized_diff & 0xFF)
+            
+            # Paso 3: Descompresión predictiva en caliente
+            recon_diff = quantized_diff * step
+            prev_sample = max(-32768, min(32767, prev_sample + recon_diff))
+            decoded.append(prev_sample)
+            
+        # Reempaquetar a bytes PCM 16-bit para la reconstrucción
+        datos_reconstruidos = struct.pack(f"<{len(decoded)}h", *decoded)
+
+        pasos = [
+            {"titulo": "Paso 1 · Predicción Temporal (Diferencia)", "detalle": "En lugar de guardar la muestra de audio completa, se calcula matemáticamente la diferencia entre la muestra actual y la inmediatamente anterior."},
+            {"titulo": "Paso 2 · Cuantización (ADPCM)", "detalle": "El error (la diferencia) se divide y reduce para que ocupe únicamente 8 bits, ahorrando el 50% de almacenamiento respecto a la onda original."},
+            {"titulo": "Paso 3 · Descompresión (Reconstrucción Predictiva)", "detalle": "El reproductor lee la diferencia cuantizada y se la suma al último valor conocido, dibujando nuevamente la onda de 16-bits para enviarla al parlante."}
+        ]
+
+        t1 = time.perf_counter()
+        return ResultadoCompresion("ADPCM (Funcional Simplificado)", datos, bytes(encoded), datos_reconstruidos, len(datos), len(encoded), 2.0, 0.5, (t1-t0)*1000, pasos, es_stub=False)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -900,11 +957,26 @@ def tab_video() -> None:
         </div>
         '''
 
+        # ADICIÓN: Detalle completo de descompresión de Video
+        html_videodec = '''
+        <div style="display:flex; flex-direction:column; align-items:flex-start; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:0.5rem;">PROCESO DE DESCOMPRESIÓN Y REPRODUCCIÓN</div>
+            <ul style="font-size:0.8rem; color:var(--txt); line-height:1.6;">
+                <li><b>1. Decodificación Entrópica:</b> El reproductor invierte el flujo CABAC para obtener los coeficientes cuantizados y los vectores de movimiento crudos.</li>
+                <li><b>2. IDCT del Residual:</b> Se reconstruye el bloque de "errores" (las diferencias finas que la predicción no logró captar).</li>
+                <li><b>3. Compensación de Movimiento:</b> El reproductor busca el frame anterior en su memoria buffer (t-1) y desplaza los píxeles según le indique el vector de movimiento.</li>
+                <li><b>4. Fusión de Trama:</b> Suma el bloque desplazado con el residual (error) calculado en el paso 2 para generar el frame final (t).</li>
+                <li><b>5. Filtro In-Loop (Deblocking):</b> Suaviza los bordes de los bloques de 16x16 para que tu ojo no note el clásico "pixelado" de compresión antes de mostrarlo en pantalla.</li>
+            </ul>
+        </div>
+        '''
+
         pasos = [
             {"titulo": "Paso 1 · Partición en Macroblocks", "detalle": "División de cada frame en bloques de 16x16 o variables.", "html": html_macroblocks},
             {"titulo": "Paso 2 · Predicción (Motion Estimation)", "detalle": "Cálculo de vectores de movimiento para tramas P y B.", "html": html_motion},
             {"titulo": "Paso 3 · DCT y Cuantización", "detalle": "Aplicación de DCT sobre los residuales y reducción de precisión.", "html": html_residual},
-            {"titulo": "Paso 4 · CABAC", "detalle": "Codificación aritmética adaptiva basada en contexto.", "html": html_cabac}
+            {"titulo": "Paso 4 · CABAC", "detalle": "Codificación aritmética adaptiva basada en contexto.", "html": html_cabac},
+            {"titulo": "Paso 5 · Proceso de Descompresión (Playback)", "detalle": "Secuencia de pasos para reconstruir el video en el reproductor a 60FPS.", "html": html_videodec}
         ]
         
         res = ResultadoCompresion(
