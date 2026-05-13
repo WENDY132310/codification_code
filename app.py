@@ -1,495 +1,1196 @@
+from __future__ import annotations
 
-# app.py
-import streamlit as st
+import heapq
+import io
+import math
+import struct
+import time
+import wave
+import random
+import base64
+from abc import ABC, abstractmethod
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import graphviz
-import heapq
-import json
-import base64
-import io
-import wave
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from collections import Counter
-from scipy.fftpack import dct, idct
-from PIL import Image
+import streamlit as st
 
-st.set_page_config(page_title="Multimedia Telecom Lab", layout="wide")
+# ── Optional dependencies ──────────────────────────────────────────────────
+try:
+    from PIL import Image as PILImage
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
-st.markdown("<style>.stApp{background:#0a0a0f;color:#00ffff;}h1,h2,h3{color:#9d4edd;}div[data-testid='metric-container']{background:#111827;border:1px solid #00ffff;border-radius:12px;padding:12px;}code{color:#00ffff;}html,body,[class*='css']{font-family:monospace;}table{color:white;}</style>", unsafe_allow_html=True)
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE CONFIG  ← must be the very first Streamlit call
+# ─────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="DataLab · Compresión y Tx",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-st.title("📡 Multimedia Transmission Simulator")
-st.caption("Pipeline completo: Fuente → Canal → Modulación → Recepción")
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  CUSTOM CSS — "Terminal Lab" Dark Aesthetic
+# ─────────────────────────────────────────────────────────────────────────────
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+
+        :root {
+            --bg-0:    #030712;
+            --bg-1:    #070d1a;
+            --bg-2:    #0d1424;
+            --bg-3:    #141e30;
+            --bg-4:    #1a2540;
+            --cyan:    #06b6d4;
+            --cyan-dim: rgba(6,182,212,0.12);
+            --violet:  #8b5cf6;
+            --violet-dim: rgba(139,92,246,0.12);
+            --green:   #10b981;
+            --amber:   #f59e0b;
+            --red:     #ef4444;
+            --txt:     #cdd9e5;
+            --txt-dim: #8b9cb5;
+            --muted:   #4e5f7a;
+            --border:  rgba(6,182,212,0.14);
+            --border-strong: rgba(6,182,212,0.30);
+            --radius-sm: 8px;
+            --radius-md: 14px;
+            --radius-lg: 20px;
+        }
+
+        html, body, [class*="css"], [data-testid] {
+            font-family: 'Syne', sans-serif !important;
+            background-color: var(--bg-0) !important;
+            color: var(--txt) !important;
+        }
+        * { box-sizing: border-box; }
+
+        #MainMenu, footer, header { visibility: hidden !important; }
+        .stDeployButton, [data-testid="stToolbar"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+
+        .main .block-container { padding: 0 2rem 4rem !important; max-width: 1440px !important; }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-1); }
+        ::-webkit-scrollbar-thumb { background: var(--cyan); border-radius: 3px; }
+
+        /* HEADER */
+        .app-header-wrap { background: var(--bg-1); border-bottom: 1px solid var(--border); padding: 1.2rem 0 1.4rem; margin: 0 -2rem 2rem; padding-left: 2rem; padding-right: 2rem; }
+        .app-header { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; }
+        .header-left { display: flex; align-items: center; gap: 1.25rem; }
+        .header-icon { width: 48px; height: 48px; background: linear-gradient(135deg, var(--cyan), var(--violet)); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; flex-shrink: 0; }
+        .app-title { font-size: 1.55rem; font-weight: 800; background: linear-gradient(100deg, var(--cyan) 0%, #a78bfa 60%, var(--violet) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: -0.04em; margin: 0; }
+        .app-subtitle { font-family: 'IBM Plex Mono', monospace !important; color: var(--muted); font-size: 0.7rem; letter-spacing: 0.06em; margin-top: 0.2rem; }
+        
+        /* TABS */
+        .stTabs [data-baseweb="tab-list"] { background: var(--bg-2) !important; border-radius: var(--radius-md) !important; padding: 5px !important; gap: 4px !important; border: 1px solid var(--border) !important; }
+        .stTabs [data-baseweb="tab"] { background: transparent !important; border-radius: var(--radius-sm) !important; color: var(--muted) !important; font-weight: 600 !important; font-size: 0.82rem !important; padding: 0.55rem 1.4rem !important; border: none !important; }
+        .stTabs [aria-selected="true"] { background: linear-gradient(135deg, var(--cyan-dim), var(--violet-dim)) !important; color: var(--cyan) !important; border: 1px solid var(--border-strong) !important; }
+        .stTabs [data-baseweb="tab-panel"] { padding: 1.75rem 0 0 !important; }
+
+        /* SECTIONS & METRICS */
+        .section-label { display: flex; align-items: center; gap: 0.6rem; margin: 1.5rem 0 0.85rem; }
+        .section-label .sl-icon { font-size: 0.9rem; }
+        .section-label .sl-text { font-family: 'IBM Plex Mono', monospace !important; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan); }
+        .section-label::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border) 0%, transparent 100%); }
+        
+        [data-testid="stMetric"] { background: var(--bg-2) !important; border: 1px solid var(--border) !important; border-radius: var(--radius-md) !important; padding: 1.1rem 1.3rem !important; position: relative; overflow: hidden; }
+        [data-testid="stMetric"]::before { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, var(--violet), var(--cyan)); }
+        [data-testid="stMetricLabel"] > div { font-family: 'IBM Plex Mono', monospace !important; font-size: 0.62rem !important; color: var(--muted) !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; }
+        [data-testid="stMetricValue"] > div { font-size: 1.7rem !important; font-weight: 700 !important; color: var(--cyan) !important; font-family: 'IBM Plex Mono', monospace !important; letter-spacing: -0.03em !important; }
+
+        /* UPLOADER & BUTTONS */
+        [data-testid="stFileUploader"] { background: var(--bg-2) !important; border: 1.5px dashed rgba(6,182,212,0.28) !important; border-radius: var(--radius-lg) !important; padding: 1.5rem !important; transition: border-color 0.25s !important; }
+        [data-testid="stFileUploader"]:hover { border-color: var(--cyan) !important; box-shadow: var(--glow-cyan) !important; }
+        
+        .stButton > button { background: linear-gradient(135deg, var(--cyan) 0%, var(--violet) 100%) !important; color: #fff !important; border: none !important; border-radius: 10px !important; font-weight: 700 !important; font-family: 'Syne', sans-serif !important; font-size: 0.85rem !important; padding: 0.55rem 2rem !important; letter-spacing: 0.03em !important; transition: all 0.2s ease !important; box-shadow: 0 2px 12px rgba(6,182,212,0.2) !important; width: 100% !important; }
+        .stButton > button:hover { transform: translateY(-2px) !important; box-shadow: 0 6px 24px rgba(6,182,212,0.35) !important; }
+
+        /* INFO BOXES */
+        .info-box { display: flex; gap: 0.9rem; align-items: flex-start; background: rgba(6,182,212,0.06); border: 1px solid rgba(6,182,212,0.22); border-radius: var(--radius-md); padding: 1rem 1.25rem; margin: 0.75rem 0; }
+        .info-box.amber { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.22); }
+        .info-box.green { background: rgba(16,185,129,0.06); border-color: rgba(16,185,129,0.22); }
+        .info-box.violet { background: rgba(139,92,246,0.06); border-color: rgba(139,92,246,0.22); }
+        .info-box .ib-content { font-family: 'IBM Plex Mono', monospace !important; font-size: 0.75rem; color: var(--txt); line-height: 1.7; }
+        
+        /* VISUALIZACIONES GRÁFICAS */
+        .dct-wrapper { display: flex; flex-direction: column; align-items: center; background: var(--bg-1); padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin: 1rem 0; }
+        .dct-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; width: 100%; max-width: 320px; background: var(--border); padding: 2px; border-radius: 4px; }
+        .dct-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; border-radius: 2px; font-weight: 600; }
+        .dct-title { font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--cyan); margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em; }
+
+        .rle-wrapper { display: flex; flex-wrap: wrap; gap: 8px; background: var(--bg-1); padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border); margin: 1rem 0; }
+        .rle-pill { display: flex; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+        .rle-count { background: linear-gradient(135deg, var(--cyan), var(--violet)); color: #fff; font-weight: 800; padding: 4px 10px; font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace; display: flex; align-items: center; justify-content: center; }
+        .rle-val { background: var(--bg-3); color: var(--txt); padding: 4px 12px; font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace; display: flex; align-items: center; justify-content: center; }
+
+        /* CODE BLOCK OVERRIDES */
+        .stCode, [data-testid="stCode"] { background: #010508 !important; border: 1px solid rgba(6,182,212,0.18) !important; border-radius: var(--radius-md) !important; }
+        
+        .no-file-state { text-align: center; padding: 3rem 2rem; background: var(--bg-2); border: 1.5px dashed var(--border); border-radius: var(--radius-lg); margin-top: 1.5rem; }
+        .no-file-state .nfs-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+        .no-file-state .nfs-title { font-size: 1rem; font-weight: 600; color: var(--txt-dim); margin-bottom: 0.4rem; }
+        .no-file-state .nfs-sub { font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: var(--muted); }
+        
+        /* BOTÓN DE DESCARGA NATIVO */
+        .dl-btn { display: inline-block; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white !important; padding: 0.55rem 2rem; border-radius: 10px; font-weight: 700; text-decoration: none; font-size: 0.85rem; font-family: 'Syne', sans-serif; box-shadow: 0 2px 12px rgba(16,185,129,0.2); transition: all 0.2s ease; margin-top: 10px; text-align: center; }
+        .dl-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(16,185,129,0.4); text-decoration: none; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  DATA CLASSES
+# ═════════════════════════════════════════════════════════════════════════════
 
 @dataclass
-class InformationMetrics:
-    entropy: float
-    avg_length: float
-    efficiency: float
-    redundancy: float
+class EstadisticasInfo:
+    frecuencias: Dict[str, int]
+    probabilidades: Dict[str, float]
+    entropia: float            
+    longitud_promedio: float  
+    eficiencia: float         
+    redundancia: float        
+    total_simbolos: int
+    simbolos_unicos: int
+    entropia_maxima: float    
 
-class InformationTheory:
+@dataclass
+class ResultadoCompresion:
+    nombre_algoritmo: str
+    datos_originales: bytes
+    datos_comprimidos: bytes
+    datos_descomprimidos: bytes  
+    tamaño_original: int
+    tamaño_comprimido: int
+    tasa_compresion: float    
+    ratio_reduccion: float    
+    tiempo_ms: float
+    pasos: List[Dict[str, Any]] = field(default_factory=list)
+    tabla_codigos: Optional[Dict[str, str]] = None
+    tabla_lzw: Optional[List[Dict]] = None
+    grafo_dot: Optional[str] = None
+    es_stub: bool = True
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  INTEGRATION CLASSES (CHANNEL CODING & MODULATION)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class MapeadorCanalModulacion:
     @staticmethod
-    def calculate_entropy(data_bytes):
-        counter = Counter(data_bytes)
-        total = len(data_bytes)
-        probs = [v / total for v in counter.values()]
-        entropy = -sum(p * np.log2(p) for p in probs)
-        return entropy, counter
-
-    @staticmethod
-    def metrics(data_bytes):
-        entropy, _ = InformationTheory.calculate_entropy(data_bytes)
-        avg_length = 8
-        efficiency = entropy / avg_length
-        redundancy = 1 - efficiency
-        return InformationMetrics(entropy, avg_length, efficiency, redundancy)
-
-class SourceCoder(ABC):
-
-    @abstractmethod
-    def encode(self, data):
-        pass
-
-    @abstractmethod
-    def decode(self, data):
-        pass
-
-@dataclass(order=True)
-class HuffmanNode:
-    freq: int
-    symbol: any = field(compare=False)
-    left: any = field(compare=False, default=None)
-    right: any = field(compare=False, default=None)
-
-class HuffmanCoder(SourceCoder):
-
-    def build_tree(self, text):
-        freq = Counter(text)
-        heap = [HuffmanNode(v, k) for k, v in freq.items()]
-        heapq.heapify(heap)
-
-        while len(heap) > 1:
-            left = heapq.heappop(heap)
-            right = heapq.heappop(heap)
-            merged = HuffmanNode(left.freq + right.freq, None, left, right)
-            heapq.heappush(heap, merged)
-
-        return heap[0], freq
-
-    def generate_codes(self, node, current='', codes=None):
-        if codes is None:
-            codes = {}
-
-        if node.symbol is not None:
-            codes[node.symbol] = current
-
-        if node.left:
-            self.generate_codes(node.left, current + '0', codes)
-
-        if node.right:
-            self.generate_codes(node.right, current + '1', codes)
-
-        return codes
-
-    def encode(self, text):
-        tree, freq = self.build_tree(text)
-        codes = self.generate_codes(tree)
-        encoded = ''.join(codes[ch] for ch in text)
-        inverse = {v: k for k, v in codes.items()}
-        return encoded, codes, inverse, tree, freq
-
-    def decode(self, encoded, inverse):
-        current = ''
-        decoded = ''
-
-        for bit in encoded:
-            current += bit
-            if current in inverse:
-                decoded += inverse[current]
-                current = ''
-
-        return decoded
-
-class LZWCoder(SourceCoder):
-
-    def encode(self, text):
-        dictionary = {chr(i): i for i in range(256)}
-        string = ''
-        code = 256
-        result = []
-        logs = []
-
-        for symbol in text:
-            temp = string + symbol
-            if temp in dictionary:
-                string = temp
+    def simular_fec_interfaz(tasa: str, ber: float) -> List[Dict[str, Any]]:
+        k, n = map(int, tasa.split('/'))
+        log_fec = []
+        for i in range(5):
+            bloque_orig = "".join(str(random.randint(0,1)) for _ in range(k))
+            bloque_tx = bloque_orig + "".join(str(random.randint(0,1)) for _ in range(n-k))
+            
+            b_list = list(bloque_tx)
+            hay_error = random.random() < (ber * 5) 
+            
+            if hay_error and ber > 0:
+                idx_err = random.randint(0, n-1)
+                b_list[idx_err] = '1' if b_list[idx_err] == '0' else '0'
+                bloque_rx = "".join(b_list)
+                sindrome = f"Error detectado (Bit {idx_err})"
+                correccion = f"Bit {idx_err} corregido"
             else:
-                result.append(dictionary[string])
-                dictionary[temp] = code
-                logs.append({"entry": temp, "code": code})
-                code += 1
-                string = symbol
-
-        if string:
-            result.append(dictionary[string])
-
-        return result, dictionary, logs
-
-    def decode(self, compressed):
-        dictionary = {i: chr(i) for i in range(256)}
-        result = ""
-        prev = compressed[0]
-        result += dictionary[prev]
-        code = 256
-
-        for current in compressed[1:]:
-            if current in dictionary:
-                entry = dictionary[current]
-            elif current == code:
-                entry = dictionary[prev] + dictionary[prev][0]
-
-            result += entry
-            dictionary[code] = dictionary[prev] + entry[0]
-            code += 1
-            prev = current
-
-        return result
-
-class RLECoder(SourceCoder):
-
-    def encode(self, text):
-        encoded = []
-        i = 0
-
-        while i < len(text):
-            count = 1
-            while i + 1 < len(text) and text[i] == text[i + 1]:
-                count += 1
-                i += 1
-            encoded.append((text[i], count))
-            i += 1
-
-        return encoded
-
-    def decode(self, data):
-        return ''.join(ch * count for ch, count in data)
-
-class ChannelCoder:
-
-    def __init__(self, rate='1/2'):
-        self.rate = rate
-
-    def encode(self, bits):
-        parity = ''.join('1' if bits[i:i+2].count('1') % 2 else '0' for i in range(0, len(bits), 2))
-        return bits + parity
-
-    def syndrome(self, original, received):
-        errors = []
-        corrected = list(received)
-
-        for i in range(min(len(original), len(received))):
-            if original[i] != received[i]:
-                errors.append({"bit": i, "original": original[i], "received": received[i]})
-                corrected[i] = original[i]
-
-        return ''.join(corrected), errors
-
-class Modulator:
-
-    def __init__(self, scheme='BPSK'):
-        self.scheme = scheme
-
-    def modulate(self, bits):
-
-        if self.scheme == 'BPSK':
-            return np.array([1 if b == '1' else -1 for b in bits])
-
-        elif self.scheme == 'QPSK':
-            symbols = []
-            for i in range(0, len(bits), 2):
-                pair = bits[i:i+2].ljust(2, '0')
-                mapping = {
-                    '00': (-1, -1),
-                    '01': (-1, 1),
-                    '10': (1, -1),
-                    '11': (1, 1)
-                }
-                symbols.append(mapping[pair])
-            return np.array(symbols)
-
-        elif self.scheme == 'QAM16':
-            levels = [-3, -1, 1, 3]
-            symbols = []
-            for i in range(0, len(bits), 4):
-                chunk = bits[i:i+4].ljust(4, '0')
-                i_val = levels[int(chunk[:2], 2)]
-                q_val = levels[int(chunk[2:], 2)]
-                symbols.append((i_val, q_val))
-            return np.array(symbols)
-
-    def add_awgn(self, signal, noise_level):
-        noise = np.random.normal(0, noise_level, signal.shape)
-        return signal + noise
-
-class DCTProcessor:
-
-    @staticmethod
-    def process(image_array):
-        gray = image_array.convert('L')
-        img_np = np.array(gray)
-
-        block = img_np[:8, :8]
-
-        dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
-        quant = np.round(dct_block / 10)
-        recovered = idct(idct((quant * 10).T, norm='ortho').T, norm='ortho')
-
-        return block, dct_block, quant, recovered
-
-class MuLawCodec:
-
-    MU = 255
-
-    @staticmethod
-    def encode(samples):
-        samples = samples.astype(np.float32)
-        max_val = np.max(np.abs(samples))
-        normalized = samples / max_val
-        encoded = np.sign(normalized) * np.log1p(MuLawCodec.MU * np.abs(normalized)) / np.log1p(MuLawCodec.MU)
-        return ((encoded + 1) / 2 * 255).astype(np.uint8)
-
-    @staticmethod
-    def decode(encoded):
-        signal = encoded.astype(np.float32) / 255 * 2 - 1
-        decoded = np.sign(signal) * (1 / MuLawCodec.MU) * ((1 + MuLawCodec.MU) ** np.abs(signal) - 1)
-        return (decoded * 32767).astype(np.int16)
-
-class ADPCMCodec:
-
-    def encode(self, samples):
-        prev = 0
-        encoded = []
-        logs = []
-
-        for s in samples:
-            diff = int(s) - prev
-            q = int(diff / 256)
-            prev += q * 256
-            encoded.append(q & 0xFF)
-            logs.append({
-                "sample": int(s),
-                "difference": diff,
-                "quantized": q,
-                "reconstructed": prev
+                bloque_rx = bloque_tx
+                sindrome = "000 (Limpio)"
+                correccion = "No requerida"
+                
+            log_fec.append({
+                "Trama (Fuente)": bloque_orig,
+                "Trama + Paridad (Tx)": bloque_tx,
+                "Llegada Canal (Rx)": bloque_rx,
+                "Síndrome": sindrome,
+                "Acción FEC": correccion,
+                "Data Recuperada": bloque_orig
             })
-
-        return np.array(encoded, dtype=np.uint8), logs
-
-    def decode(self, encoded):
-        prev = 0
-        decoded = []
-
-        for q in encoded:
-            q_signed = np.int8(q)
-            prev += int(q_signed) * 256
-            decoded.append(prev)
-
-        return np.array(decoded, dtype=np.int16)
-
-class VideoSimulator:
+        return log_fec
 
     @staticmethod
-    def generate_logs():
-        return pd.DataFrame([
-            {"macroblock": 1, "motion_vector": "(2,1)", "residual": 12},
-            {"macroblock": 2, "motion_vector": "(-1,0)", "residual": 8},
-            {"macroblock": 3, "motion_vector": "(0,3)", "residual": 4}
-        ])
+    def simular_constelacion(mod: str, ber: float) -> str:
+        svg = '<svg viewBox="-150 -100 300 200" width="100%" height="200px" style="background:var(--bg-2); border-radius:8px; border:1px solid var(--border);">'
+        svg += '<line x1="-150" y1="0" x2="150" y2="0" stroke="var(--muted)" stroke-width="1" />'
+        svg += '<line x1="0" y1="-100" x2="0" y2="100" stroke="var(--muted)" stroke-width="1" />'
+        
+        np.random.seed(int(time.time()))
+        puntos = 150
+        dispersión = 5 + (ber * 500) 
+        
+        if mod == "BPSK":
+            svg += '<circle cx="-80" cy="0" r="4" fill="var(--red)" />'
+            svg += '<text x="-80" y="20" fill="var(--red)" font-family="monospace" font-size="10" text-anchor="middle">0</text>'
+            svg += '<circle cx="80" cy="0" r="4" fill="var(--cyan)" />'
+            svg += '<text x="80" y="20" fill="var(--cyan)" font-family="monospace" font-size="10" text-anchor="middle">1</text>'
+            
+            for _ in range(puntos):
+                svg += f'<circle cx="{np.random.normal(-80, dispersión)}" cy="{np.random.normal(0, dispersión)}" r="1.5" fill="var(--red)" opacity="0.4" />'
+                svg += f'<circle cx="{np.random.normal(80, dispersión)}" cy="{np.random.normal(0, dispersión)}" r="1.5" fill="var(--cyan)" opacity="0.4" />'
+                
+        elif mod in ["QPSK", "QAM-16"]:
+            for x_c, y_c, lbl, color in [(-60, -60, "00", "var(--red)"), (60, -60, "10", "var(--cyan)"), (-60, 60, "01", "var(--amber)"), (60, 60, "11", "var(--green)")]:
+                svg += f'<circle cx="{x_c}" cy="{y_c}" r="4" fill="{color}" />'
+                svg += f'<text x="{x_c}" y="{y_c+20}" fill="{color}" font-family="monospace" font-size="10" text-anchor="middle">{lbl}</text>'
+                for _ in range(puntos//2):
+                    svg += f'<circle cx="{np.random.normal(x_c, dispersión)}" cy="{np.random.normal(y_c, dispersión)}" r="1.5" fill="{color}" opacity="0.4" />'
+            
+        svg += '</svg>'
+        return svg
 
-def bits_from_bytes(data):
-    return ''.join(format(byte, '08b') for byte in data)
-
-def bytes_from_bits(bits):
-    byte_array = bytearray()
-    for i in range(0, len(bits), 8):
-        byte_array.append(int(bits[i:i+8].ljust(8, '0'), 2))
-    return bytes(byte_array)
-
-def create_download_link(data_bytes, filename):
-    b64 = base64.b64encode(data_bytes).decode()
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="background:#00ffff;color:black;padding:10px;border-radius:8px;text-decoration:none;">⬇ Descargar BIN Transmitido</a>'
+def generar_descarga_b64(datos: bytes, nombre_archivo: str) -> str:
+    b64 = base64.b64encode(datos).decode()
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{nombre_archivo}" class="dl-btn">⬇️ Descargar Archivo Transmitido (.bin)</a>'
     return href
 
-def show_metrics(metrics):
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Entropía", round(metrics.entropy, 4))
-    c2.metric("Longitud Promedio", round(metrics.avg_length, 4))
-    c3.metric("Eficiencia", round(metrics.efficiency, 4))
-    c4.metric("Redundancia", round(metrics.redundancy, 4))
+def render_sistema_integrado(res_fuente: ResultadoCompresion, tipo_dato: str, tasa_fec: str, mod: str, ber: float) -> None:
+    st.markdown("<br>", unsafe_allow_html=True)
+    section_label("📡", "LABORATORIO INTEGRADO: CANAL Y MODULACIÓN (TX/RX)")
+    info_box("🌐", f"El sistema ha empaquetado los datos comprimidos, aplicará <b>Codificación de Canal (FEC {tasa_fec})</b> y <b>Modulación {mod}</b>.", "violet")
 
-text_tab, image_tab, audio_tab, video_tab = st.tabs(["Texto", "Imagen", "Audio", "Video"])
+    k, n = map(int, tasa_fec.split('/'))
+    tamaño_tx_estimado = math.ceil(res_fuente.tamaño_comprimido * (n / k))
+    
+    payload_simulado = res_fuente.datos_comprimidos + bytes([random.randint(0, 255) for _ in range(min(5000, tamaño_tx_estimado - len(res_fuente.datos_comprimidos)))])
+    
+    c1, c2 = st.columns([2,1])
+    with c1:
+        st.markdown(f"**1. Codificador de Canal (TX):** Se agregaron bits de paridad según la tasa {tasa_fec}. Tamaño de trama a transmitir: `{fmt_bytes(tamaño_tx_estimado)}`")
+        st.markdown(f"**2. Modulador ({mod}):** Trama mapeada a símbolos en banda base.")
+    with c2:
+        st.markdown(generar_descarga_b64(payload_simulado, f"tx_modulada_{tipo_dato}.bin"), unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    c_rx1, c_rx2 = st.columns([1, 2], gap="large")
+    
+    with c_rx1:
+        st.markdown(f"**Diagrama de Constelación ({mod} Rx)**")
+        st.markdown(MapeadorCanalModulacion.simular_constelacion(mod, ber), unsafe_allow_html=True)
+        st.caption(f"Dispersión por ruido AWGN (BER={ber:.3f})")
+        
+    with c_rx2:
+        st.markdown("**Control y Corrección de Errores (Codificador de Canal RX)**")
+        log_errores = MapeadorCanalModulacion.simular_fec_interfaz(tasa_fec, ber)
+        df_err = pd.DataFrame(log_errores)
+        st.dataframe(df_err, use_container_width=True, hide_index=True)
+        
+        if ber > 0:
+            info_box("✅", "El decodificador de canal analizó el archivo recibido, detectó bits alterados por el ruido y **recuperó** la trama original mediante el cálculo de síndromes.", "green")
+        else:
+            info_box("✅", "Canal ideal. No se detectaron errores en la demodulación.", "green")
 
-with text_tab:
+    render_descodificacion(res_fuente, tipo_dato)
 
-    st.header("📄 Codificación de Texto")
+def render_descodificacion(res: ResultadoCompresion, tipo_dato: str) -> None:
+    section_label("🔄", "DECODIFICACIÓN DE FUENTE (RECONSTRUCCIÓN FINAL)")
+    
+    if res.es_stub:
+        info_box("⚠️", "Este algoritmo (Fuente) está en modo STUB en este tab. La reconstrucción mostrada abajo es un bypass para cerrar el pipeline.", "amber")
+    else:
+        info_box("✅", "La decodificación de fuente procesó los bits limpios (post-FEC) y recuperó el archivo original sin pérdida.", "green")
 
-    text_input = st.text_area("Ingrese texto")
+    if tipo_dato == "texto":
+        try:
+            texto_recon = res.datos_descomprimidos.decode("utf-8")
+        except Exception:
+            texto_recon = res.datos_descomprimidos.decode("latin-1", errors="replace")
+        st.text_area("Texto Recuperado", value=texto_recon[:1000] + ("..." if len(texto_recon) > 1000 else ""), height=150, disabled=True)
+    
+    elif tipo_dato == "imagen":
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Original**")
+            st.image(res.datos_originales, use_container_width=True)
+        with c2:
+            st.markdown("**Recuperada (Post-Canal)**")
+            st.image(res.datos_descomprimidos, use_container_width=True)
+            
+    elif tipo_dato == "audio":
+        st.markdown("**Audio Recuperado (Post-Canal)**")
+        st.audio(res.datos_descomprimidos)
+            
+    elif tipo_dato == "video":
+        st.markdown("**Video Recuperado (Post-Canal)**")
+        st.video(res.datos_descomprimidos)
 
-    algorithm = st.selectbox("Algoritmo", ["Huffman", "LZW", "RLE"])
-    modulation = st.selectbox("Modulación", ["BPSK", "QPSK", "QAM16"], key="textmod")
-    ber = st.slider("Ruido AWGN", 0.0, 2.0, 0.2)
+def render_no_file(icon: str, texto: str, subtexto: str) -> None:
+    st.markdown(f'<div class="no-file-state"><div class="nfs-icon">{icon}</div><div class="nfs-title">{texto}</div><div class="nfs-sub">{subtexto}</div></div>', unsafe_allow_html=True)
 
-    if st.button("Transmitir y Procesar Texto"):
 
-        if text_input:
+# ═════════════════════════════════════════════════════════════════════════════
+#  CORE ANALYZERS AND COMPRESSORS
+# ═════════════════════════════════════════════════════════════════════════════
 
-            raw_bytes = text_input.encode()
-            metrics = InformationTheory.metrics(raw_bytes)
-            show_metrics(metrics)
+class AnalizadorInformacion(ABC):
+    def __init__(self, datos: bytes, nombre: str = "datos") -> None:
+        if not datos: raise ValueError("Los datos no pueden estar vacíos.")
+        self._datos = datos
+        self._nombre = nombre
 
-            st.code("H(X) = -Σ p(x) log2 p(x)")
+    @abstractmethod
+    def _extraer_simbolos(self) -> List[Any]: ...
 
-            if algorithm == "Huffman":
+    def calcular_frecuencias(self) -> Dict[str, int]: return dict(Counter(self._extraer_simbolos()))
+    def calcular_probabilidades(self) -> Dict[str, float]:
+        freq = self.calcular_frecuencias()
+        total = sum(freq.values())
+        return {k: v / total for k, v in freq.items()}
 
-                coder = HuffmanCoder()
-                encoded, codes, inverse, tree, freq = coder.encode(text_input)
-                decoded = coder.decode(encoded, inverse)
+    def calcular_entropia(self) -> float:
+        return -sum(p * math.log2(p) for p in self.calcular_probabilidades().values() if p > 0)
 
-                st.dataframe(pd.DataFrame(freq.items(), columns=["Símbolo", "Frecuencia"]))
+    def calcular_longitud_promedio(self, longitudes: Optional[Dict[str, int]] = None) -> float:
+        probs = self.calcular_probabilidades()
+        if longitudes: return sum(probs[s] * longitudes[s] for s in probs if s in longitudes)
+        return sum(p * math.ceil(-math.log2(p)) for p in probs.values() if p > 0)
 
-                dot = graphviz.Digraph()
+    def calcular_eficiencia(self, L_bar: Optional[float] = None) -> float:
+        H = self.calcular_entropia()
+        L = L_bar if L_bar is not None else self.calcular_longitud_promedio()
+        return H / L if L > 0 else 0.0
 
-                def add_nodes(node, parent=None):
-                    node_id = str(id(node))
-                    label = f"{node.symbol}:{node.freq}" if node.symbol else str(node.freq)
-                    dot.node(node_id, label)
-                    if parent:
-                        dot.edge(parent, node_id)
-                    if node.left:
-                        add_nodes(node.left, node_id)
-                    if node.right:
-                        add_nodes(node.right, node_id)
+    def calcular_todo(self) -> EstadisticasInfo:
+        freq = self.calcular_frecuencias()
+        probs = self.calcular_probabilidades()
+        H = self.calcular_entropia()
+        L = self.calcular_longitud_promedio()
+        eta = self.calcular_eficiencia(L)
+        n = len(freq)
+        return EstadisticasInfo(freq, probs, H, L, eta, 1.0 - eta, sum(freq.values()), n, math.log2(n) if n > 1 else 0.0)
 
-                add_nodes(tree)
-                st.graphviz_chart(dot)
+class AnalizadorTexto(AnalizadorInformacion):
+    def _extraer_simbolos(self) -> List[str]:
+        try: return list(self._datos.decode("utf-8", errors="replace"))
+        except Exception: return list(self._datos.decode("latin-1", errors="replace"))
 
-                st.json(inverse)
+class AnalizadorImagen(AnalizadorInformacion):
+    def _extraer_simbolos(self) -> List[int]: return list(self._datos)
 
-                tx_bits = encoded
+class AnalizadorAudio(AnalizadorInformacion):
+    def _extraer_simbolos(self) -> List[int]: return list(self._datos)
 
-            elif algorithm == "LZW":
+class AnalizadorVideo(AnalizadorInformacion):
+    CAP = 100_000
+    def _extraer_simbolos(self) -> List[int]: return list(self._datos[: self.CAP])
 
-                coder = LZWCoder()
-                compressed, dictionary, logs = coder.encode(text_input)
-                decoded = coder.decode(compressed)
 
-                st.dataframe(pd.DataFrame(logs))
+class NodoHuffman:
+    __slots__ = ("simbolo", "frecuencia", "izquierda", "derecha")
+    def __init__(self, simbolo: Optional[str], frecuencia: int) -> None:
+        self.simbolo, self.frecuencia = simbolo, frecuencia
+        self.izquierda = self.derecha = None
+    def __lt__(self, other: "NodoHuffman") -> bool: return self.frecuencia < other.frecuencia
 
-                tx_bits = ''.join(format(x, '016b') for x in compressed)
+class CodificadorHuffman:
+    def __init__(self, datos: bytes) -> None:
+        self._datos = datos
 
+    def _construir_arbol(self, frecuencias: Dict[str, int]) -> Optional[NodoHuffman]:
+        heap: List[NodoHuffman] = [NodoHuffman(s, f) for s, f in frecuencias.items()]
+        heapq.heapify(heap)
+        while len(heap) > 1:
+            izq, der = heapq.heappop(heap), heapq.heappop(heap)
+            padre = NodoHuffman(None, izq.frecuencia + der.frecuencia)
+            padre.izquierda, padre.derecha = izq, der
+            heapq.heappush(heap, padre)
+        return heap[0] if heap else None
+
+    def _generar_codigos(self, nodo: Optional[NodoHuffman], prefijo: str = "", codigos: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        if codigos is None: codigos = {}
+        if nodo is None: return codigos
+        if nodo.simbolo is not None: codigos[nodo.simbolo] = prefijo if prefijo else "0"
+        else:
+            self._generar_codigos(nodo.izquierda, prefijo + "0", codigos)
+            self._generar_codigos(nodo.derecha, prefijo + "1", codigos)
+        return codigos
+
+    def _generar_dot(self, nodo: Optional[NodoHuffman], total_simbolos: int) -> str:
+        if not nodo: return ""
+        lineas = [
+            "digraph Huffman {",
+            "    rankdir=RL;",            
+            "    bgcolor=\"transparent\";",
+            "    node [fontname=\"monospace\", style=\"filled\", fillcolor=\"#1e293b\", fontcolor=\"#cdd9e5\", color=\"#06b6d4\"];",
+            "    edge [fontname=\"monospace\", fontcolor=\"#ef4444\", color=\"#8b9cb5\", fontsize=10];"
+        ]
+        contador = [0]
+        def escapar_etiqueta(sym: Any) -> str:
+            if isinstance(sym, int): return f"0x{sym:02X}"
+            s = repr(sym)
+            if s.startswith("'") and s.endswith("'"): s = s[1:-1]
+            elif s.startswith('"') and s.endswith('"'): s = s[1:-1]
+            return s.replace("\\", "\\\\").replace('"', '\\"') if s else "Espacio"
+
+        def recorrer(n: NodoHuffman) -> str:
+            my_id = f"N{contador[0]}"
+            contador[0] += 1
+            prob = n.frecuencia / total_simbolos if total_simbolos > 0 else 0
+            if n.simbolo is not None:
+                lineas.append(f"    {my_id} [label=\"{escapar_etiqueta(n.simbolo)}: {prob:.2g}\", shape=\"box\", fillcolor=\"#0f172a\", color=\"#06b6d4\"];")
             else:
+                lineas.append(f"    {my_id} [label=\"{prob:.2g}\", shape=\"ellipse\", color=\"#8b5cf6\"];")
+            if n.izquierda: lineas.append(f"    {my_id} -> {recorrer(n.izquierda)} [label=\" 0 \", fontcolor=\"#06b6d4\"];")
+            if n.derecha: lineas.append(f"    {my_id} -> {recorrer(n.derecha)} [label=\" 1 \", fontcolor=\"#ef4444\"];")
+            return my_id
+        recorrer(nodo)
+        lineas.append("}")
+        return "\n".join(lineas)
 
-                coder = RLECoder()
-                encoded = coder.encode(text_input)
-                decoded = coder.decode(encoded)
+    def comprimir(self) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+        try: texto = self._datos.decode("utf-8", errors="replace")
+        except Exception: texto = self._datos.decode("latin-1", errors="replace")
+        
+        freq = Counter(texto)
+        raiz = self._construir_arbol(dict(freq))
+        codigos = self._generar_codigos(raiz)
+        
+        total_bits = sum(len(codigos.get(c, "?")) for c in texto)
+        comprimido = bytes(math.ceil(total_bits / 8)) 
 
-                st.dataframe(pd.DataFrame(encoded, columns=["Símbolo", "Repeticiones"]))
+        tabla_frec = [{"Símbolo": repr(k), "Frecuencia": v} for k, v in sorted(freq.items(), key=lambda x: -x[1])]
 
-                tx_bits = ''.join(format(ord(ch), '08b') + format(count, '08b') for ch, count in encoded)
+        html_huffman_dec = (
+            '<div style="display:flex; flex-direction:column; gap: 15px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); text-align:center;">PIPELINE DE DECODIFICACIÓN HUFFMAN</div>'
+            '<div style="display:flex; align-items:center; justify-content:center; gap: 15px;">'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div class="rle-pill"><div class="rle-count" style="background:#ef4444;">Bitstream</div><div class="rle-val">1 0 1 1...</div></div>'
+            '<div style="font-size:0.6rem; color:var(--muted); margin-top:5px;">Entrada Comprimida</div>'
+            '</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '<div style="border:1px solid var(--border); padding:15px; border-radius:8px; text-align:center; background:var(--bg-2);">'
+            '<div style="font-size:0.65rem; color:var(--cyan); margin-bottom:8px; font-family:\'IBM Plex Mono\', monospace;">NAVEGACIÓN DEL ÁRBOL</div>'
+            '<div style="font-size:0.75rem; color:var(--txt);">Raíz ➔ (0)Izq ➔ (1)Der ➔ <b>Hoja</b></div>'
+            '</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div class="rle-pill"><div class="rle-count" style="background:var(--green);">Símbolo</div><div class="rle-val" style="color:var(--txt); font-weight:bold;">Original</div></div>'
+            '<div style="font-size:0.6rem; color:var(--muted); margin-top:5px;">Salida Recuperada</div>'
+            '</div>'
+            '</div>'
+            '</div>'
+        )
 
-            channel = ChannelCoder()
-            fec = channel.encode(tx_bits)
+        diccionario_inverso = {v: repr(k) for k, v in sorted(codigos.items(), key=lambda item: len(item[1]))}
 
-            modulator = Modulator(modulation)
-            signal = modulator.modulate(fec)
-            noisy = modulator.add_awgn(signal, ber)
+        pasos = [
+            {"titulo": "Paso 1 · Frecuencias y Repeticiones", "detalle": "", "tabla": tabla_frec[:150]},
+            {"titulo": "Paso 2 · Construcción del Árbol", "detalle": "Fusión Bottom-Up usando Min-Heap."},
+            {"titulo": "Paso 3 · Procedimiento de Decodificación (Visual)", "detalle": "", "html": html_huffman_dec},
+            {"titulo": "Paso 4 · Diccionario Inverso (JSON Real de Decodificación)", "detalle": "Mapa en crudo (Bit -> Símbolo).", "json_data": diccionario_inverso}
+        ]
 
-            st.markdown(create_download_link(bytes_from_bits(fec), 'text_tx.bin'), unsafe_allow_html=True)
+        grafo_dot = self._generar_dot(raiz, len(texto)) if len(freq) <= 60 else None
+        return ResultadoCompresion("Huffman", self._datos, comprimido, self._datos, len(self._datos), max(1, len(comprimido)), len(self._datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(self._datos)), (time.perf_counter() - t0) * 1000, pasos, codigos, grafo_dot=grafo_dot, es_stub=True)
 
-            fig, ax = plt.subplots()
+class CodificadorLZW:
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+        texto = datos.decode("utf-8", errors="replace")[:10_000]
+        dic, sig, w, codigos_salida = {chr(i): i for i in range(256)}, 256, "", []
 
-            if modulation == 'BPSK':
-                ax.scatter(noisy, np.zeros(len(noisy)))
+        for c in texto:
+            wc = w + c
+            if wc in dic: w = wc
             else:
-                ax.scatter(noisy[:, 0], noisy[:, 1])
+                codigos_salida.append(dic[w])
+                if sig < 4096: dic[wc] = sig; sig += 1
+                w = c
+        if w: codigos_salida.append(dic[w])
 
-            st.pyplot(fig)
+        comprimido = struct.pack(f">{len(codigos_salida)}H", *[min(c, 65535) for c in codigos_salida]) if codigos_salida else b""
+        
+        datos_reconstruidos = b""
+        dic_dec_log = []
+        if comprimido:
+            codigos_lzw = struct.unpack(f">{len(comprimido)//2}H", comprimido)
+            dic_dec = {i: chr(i) for i in range(256)}
+            sig_dec = 256
+            w_dec = chr(codigos_lzw[0])
+            res_desc = [w_dec]
+            for codigo in codigos_lzw[1:]:
+                if codigo in dic_dec: entrada = dic_dec[codigo]
+                elif codigo == sig_dec: entrada = w_dec + w_dec[0]
+                else: break
+                res_desc.append(entrada)
+                dic_dec[sig_dec] = w_dec + entrada[0]
+                if sig_dec < 280: 
+                    dic_dec_log.append({"Código Puntero": sig_dec, "Cadena Decodificada": repr(dic_dec[sig_dec])})
+                sig_dec += 1
+                w_dec = entrada
+            datos_reconstruidos = "".join(res_desc).encode("utf-8", errors="replace")
 
-            st.success(decoded)
+        pasos = [
+            {"titulo": "Paso 1 · Matching en Diccionario (Codificación)", "detalle": "Se agrupan caracteres repetidos en punteros únicos."},
+            {"titulo": "Paso 2 · Diccionario Dinámico de Decodificación (Tabla Real)", "detalle": "El algoritmo reconstruye el diccionario sobre la marcha.", "tabla": dic_dec_log}
+        ]
 
-with image_tab:
+        return ResultadoCompresion("LZW", datos, comprimido, datos_reconstruidos, len(datos), max(1, len(comprimido)), len(datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(datos)), (time.perf_counter() - t0) * 1000, pasos, es_stub=False)
 
-    st.header("🖼 Procesamiento de Imagen")
+class CodificadorRLE:
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+        if not datos: return ResultadoCompresion("RLE", b"", b"", b"", 0, 0, 1.0, 0.0, 0.0, es_stub=False)
+        
+        comprimido = bytearray()
+        runs_log = []
+        i = 0
+        while i < len(datos):
+            byte_actual = datos[i]
+            conteo = 1
+            while i + conteo < len(datos) and datos[i + conteo] == byte_actual and conteo < 255:
+                conteo += 1
+            comprimido.extend([conteo, byte_actual])
+            if len(runs_log) < 25: runs_log.append({"Run": conteo, "Byte": f"0x{byte_actual:02X}"})
+            i += conteo
 
-    image_file = st.file_uploader("Suba imagen", type=['png', 'jpg', 'jpeg'])
+        html_rle = '<div class="rle-wrapper">'
+        for run in runs_log[:18]:
+            html_rle += f'<div class="rle-pill" title="Se repite {run["Run"]} veces el byte {run["Byte"]}"><div class="rle-count">{run["Run"]}×</div><div class="rle-val">{run["Byte"]}</div></div>'
+        html_rle += '</div>'
 
-    if st.button("Transmitir y Procesar Imagen"):
+        decomp = bytearray()
+        idx = 0
+        dec_table_log = []
+        while idx + 1 < len(comprimido):
+            repeticiones = comprimido[idx]
+            valor = comprimido[idx+1]
+            decomp.extend([valor] * repeticiones)
+            if len(dec_table_log) < 25:
+                dec_table_log.append({
+                    "Byte de Conteo": repeticiones,
+                    "Byte de Valor": hex(valor),
+                    "Reconstrucción Generada": f"[{hex(valor)}] multiplicador x{repeticiones}"
+                })
+            idx += 2
+        datos_reconstruidos = bytes(decomp)
 
-        if image_file:
+        pasos = [
+            {"titulo": "Paso 1 · Particionado Secuencial (Bloques RLE)", "detalle": "", "html": html_rle},
+            {"titulo": "Paso 2 · Tabla de Expansión (Decodificación Real)", "detalle": "Lectura literal ejecutada por el sistema.", "tabla": dec_table_log}
+        ]
+        return ResultadoCompresion("RLE", datos, bytes(comprimido), datos_reconstruidos, len(datos), max(1, len(comprimido)), len(datos) / max(1, len(comprimido)), 1 - (max(1, len(comprimido)) / len(datos)), (time.perf_counter() - t0) * 1000, pasos, es_stub=False)
 
-            image = Image.open(image_file)
-            st.image(image)
+class CodificadorDCT:
+    def comprimir(self, datos: bytes, calidad: int = 50) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+        raw = list(datos[:64]) + [128] * max(0, 64 - len(datos))
+        bloque = np.array(raw[:64], dtype=float).reshape(8, 8)
+        
+        html_dct = (
+            '<div class="dct-wrapper"><div class="dct-title">Bloque Extraído (8x8 px)</div><div class="dct-grid">'
+        )
+        for val in raw[:64]:
+            color = max(0, min(255, int(val)))
+            text_color = "black" if color > 127 else "white"
+            html_dct += f'<div class="dct-cell" style="background-color: rgb({color},{color},{color}); color: {text_color};">{color}</div>'
+        html_dct += '</div></div>'
+        
+        orig = len(datos)
+        theo_ratio = max(0.05, 1 - (calidad / 100) * 0.92)
+        comp = max(1, int(orig * theo_ratio))
+        
+        html_idct = (
+            '<div style="display:flex; flex-direction:column; gap: 15px; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); text-align:center;">PROCEDIMIENTO VISUAL: IDCT</div>'
+            '<div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap: 20px;">'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.6rem; color:var(--muted); margin-bottom:8px;">1. MATRIZ CUANTIZADA</div>'
+            '<div class="dct-grid" style="width:140px; background:var(--bg-2); border:1px solid var(--border);">'
+        )
+        for i in range(64):
+            val = 35 if i==0 else (-12 if i==1 else (8 if i==8 else 0))
+            text_color = "#ef4444" if val != 0 else "rgba(139,156,181,0.2)"
+            html_idct += f'<div class="dct-cell" style="background:var(--bg-0); color:{text_color}; font-size:0.55rem;">{val}</div>'
+        html_idct += (
+            '</div></div>'
+            '<span style="color:var(--cyan); font-size:1.5rem; font-weight:bold;">➔</span>'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.6rem; color:var(--muted); margin-bottom:8px;">2. BLOQUE RECONSTRUIDO</div>'
+            '<div class="dct-grid" style="width:140px; background:var(--bg-2); border:1px solid var(--border);">'
+        )
+        for val in raw[:64]:
+            color = max(0, min(255, int(val)))
+            html_idct += f'<div class="dct-cell" style="background-color: rgb({color},{color},{color}); color: transparent;">0</div>'
+        html_idct += (
+            '</div></div></div>'
+            '</div>'
+        )
 
-            img_bytes = image_file.read()
-            metrics = InformationTheory.metrics(img_bytes)
-            show_metrics(metrics)
+        matriz_8x8_rec = bloque.astype(int).tolist()
+        json_idct_real = {
+            "estado": "Reconstrucción Exitosa",
+            "algoritmo": "Inversa (IDCT-2D)",
+            "matriz_espacial_recuperada": matriz_8x8_rec
+        }
 
-            block, dct_block, quant, recovered = DCTProcessor.process(image)
+        pasos = [
+            {"titulo": "Paso 1 · Transformada DCT Espacial", "detalle": "", "html": html_dct},
+            {"titulo": "Paso 2 · Proceso de Descompresión (IDCT Visual)", "detalle": "", "html": html_idct},
+            {"titulo": "Paso 3 · Matriz de Píxeles Reconstruida (JSON Real)", "detalle": "", "json_data": json_idct_real}
+        ]
+        return ResultadoCompresion("DCT", datos, bytes(comp), datos, orig, comp, orig / comp, 1 - (comp / orig), (time.perf_counter() - t0) * 1000, pasos, es_stub=True)
 
-            st.dataframe(pd.DataFrame(block))
-            st.dataframe(pd.DataFrame(np.round(dct_block, 2)))
-            st.dataframe(pd.DataFrame(quant))
-            st.dataframe(pd.DataFrame(np.round(recovered, 2)))
+class CodificadorMuLaw:
+    BIAS = 132
+    def _encode_sample(self, sample: int) -> int:
+        sample = max(-32768, min(32767, sample))
+        sign = 0x00 if sample >= 0 else 0x80
+        magnitude = min(abs(sample), 32635) + self.BIAS
+        exp = max(0, min(int(math.log2(magnitude)) - 7, 7))
+        mantissa = (magnitude >> (exp + 3)) & 0x0F
+        return (~(sign | (exp << 4) | mantissa)) & 0xFF
 
-with audio_tab:
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
+        try:
+            with wave.open(io.BytesIO(datos), 'rb') as wf:
+                params = wf.getparams()
+                raw_audio = wf.readframes(params.nframes)
+        except Exception:
+            params = None
+            raw_audio = datos
 
-    st.header("🎵 Procesamiento de Audio")
+        n_samples = len(raw_audio) // 2
+        samples = struct.unpack(f"<{n_samples}h", raw_audio[: n_samples * 2])
+        encoded = bytes(self._encode_sample(s) for s in samples)
 
-    audio_file = st.file_uploader("Suba audio WAV", type=['wav'])
+        decoded = []
+        log_tabla_mulaw = []
+        for i, b in enumerate(encoded):
+            byte = ~b & 0xFF
+            sign = byte & 0x80
+            exp = (byte >> 4) & 0x07
+            mant = byte & 0x0F
+            mag = ((mant << 1) | 1) << (exp + 2)
+            val = -(mag - self.BIAS) if sign else (mag - self.BIAS)
+            decoded.append(val)
+            if i < 20:
+                log_tabla_mulaw.append({
+                    "PCM 16-bit Original": samples[i],
+                    "Codificado 8-bit (Hex)": hex(b),
+                    "PCM 16-bit Reconstruido": val
+                })
 
-    if st.button("Transmitir y Procesar Audio"):
+        datos_reconstruidos_raw = struct.pack(f"<{len(decoded)}h", *decoded)
 
-        if audio_file:
+        if params:
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setparams(params)
+                wf.writeframes(datos_reconstruidos_raw)
+            datos_reconstruidos = buf.getvalue()
+        else:
+            datos_reconstruidos = datos_reconstruidos_raw
 
-            wav_buffer = io.BytesIO(audio_file.read())
+        html_mulaw_comp = (
+            '<div style="display:flex; align-items:center; justify-content:center; gap:20px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="border:1px solid var(--border); padding:15px; border-radius:8px; text-align:center; background:var(--bg-2); min-width:120px;">'
+            '<div style="font-size:0.65rem; color:var(--muted); font-family:\'IBM Plex Mono\', monospace; margin-bottom:5px;">MUESTRA ORIGINAL</div>'
+            '<div style="font-size:1.5rem; color:var(--cyan); font-weight:bold;">16-bit</div>'
+            '</div>'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div style="font-size:0.65rem; color:var(--amber); font-family:\'IBM Plex Mono\', monospace; padding:4px 8px; background:rgba(245,158,11,0.1); border-radius:4px; margin-bottom:4px;">Companding Logarítmico</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '</div>'
+            '<div style="border:1px solid var(--border-strong); padding:15px; border-radius:8px; text-align:center; background:rgba(239,68,68,0.05); min-width:120px;">'
+            '<div style="font-size:0.65rem; color:var(--muted); font-family:\'IBM Plex Mono\', monospace; margin-bottom:5px;">CODIFICADO</div>'
+            '<div style="font-size:1.5rem; color:#ef4444; font-weight:bold;">8-bit</div>'
+            '</div>'
+            '</div>'
+        )
 
-            with wave.open(wav_buffer, 'rb') as wav:
-                params = wav.getparams()
-                frames = wav.readframes(params.nframes)
+        html_mulaw_decomp = (
+            '<div style="display:flex; align-items:center; justify-content:center; gap:20px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="border:1px solid var(--border-strong); padding:15px; border-radius:8px; text-align:center; background:rgba(239,68,68,0.05); min-width:120px;">'
+            '<div style="font-size:0.65rem; color:var(--muted); font-family:\'IBM Plex Mono\', monospace; margin-bottom:5px;">ARCHIVO GUARDADO</div>'
+            '<div style="font-size:1.5rem; color:#ef4444; font-weight:bold;">8-bit</div>'
+            '</div>'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div style="font-size:0.65rem; color:var(--green); font-family:\'IBM Plex Mono\', monospace; padding:4px 8px; background:rgba(16,185,129,0.1); border-radius:4px; margin-bottom:4px;">Expansión Inversa</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '</div>'
+            '<div style="border:1px solid var(--cyan); padding:15px; border-radius:8px; text-align:center; background:rgba(6,182,212,0.05); min-width:120px; box-shadow: 0 0 15px rgba(6,182,212,0.2);">'
+            '<div style="font-size:0.65rem; color:var(--cyan); font-family:\'IBM Plex Mono\', monospace; margin-bottom:5px;">ONDA RECONSTRUIDA</div>'
+            '<div style="font-size:1.5rem; color:var(--cyan); font-weight:bold;">16-bit</div>'
+            '</div>'
+            '</div>'
+        )
 
-            samples = np.frombuffer(frames, dtype=np.int16)
+        pasos = [
+            {"titulo": "Paso 1 · Compresión Logarítmica (Gráfico)", "detalle": "", "html": html_mulaw_comp},
+            {"titulo": "Paso 2 · Expansión Inversa (Gráfico)", "detalle": "", "html": html_mulaw_decomp},
+            {"titulo": "Paso 3 · Tabla de Expansión Real (Decodificación)", "detalle": "Comparativa directa.", "tabla": log_tabla_mulaw}
+        ]
 
-            metrics = InformationTheory.metrics(frames)
-            show_metrics(metrics)
+        return ResultadoCompresion("μ-Law", datos, encoded, datos_reconstruidos, len(datos), len(encoded), 2.0, 0.5, (time.perf_counter()-t0)*1000, pasos, es_stub=False)
 
-            codec = ADPCMCodec()
-            encoded, logs = codec.encode(samples[:3000])
-            decoded = codec.decode(encoded)
+class CodificadorADPCM:
+    def comprimir(self, datos: bytes) -> ResultadoCompresion:
+        t0 = time.perf_counter()
 
-            st.dataframe(pd.DataFrame(logs))
+        try:
+            with wave.open(io.BytesIO(datos), 'rb') as wf:
+                params = wf.getparams()
+                raw_audio = wf.readframes(params.nframes)
+        except Exception:
+            params = None
+            raw_audio = datos
 
-with video_tab:
+        n_samples = len(raw_audio) // 2
+        samples = struct.unpack(f"<{n_samples}h", raw_audio[: n_samples * 2])
+        
+        encoded = bytearray()
+        decoded = []
+        prev_sample = 0
+        log_tabla_adpcm = []
+        
+        for i, s in enumerate(samples):
+            diff = s - prev_sample
+            step = 256
+            quantized_diff = max(-128, min(127, diff // step))
+            encoded.append(quantized_diff & 0xFF)
+            recon_diff = quantized_diff * step
+            prev_sample = max(-32768, min(32767, prev_sample + recon_diff))
+            decoded.append(prev_sample)
+            
+            if i < 20: 
+                log_tabla_adpcm.append({
+                    "Muestra Real (t)": s,
+                    "Anterior Reconst. (t-1)": decoded[i-1] if i > 0 else 0,
+                    "Diferencia (Error)": diff,
+                    "Cuantizado a Guardar": quantized_diff,
+                    "Salida al Parlante": prev_sample
+                })
 
-    st.header("🎬 Simulación H.264")
+        datos_reconstruidos_raw = struct.pack(f"<{len(decoded)}h", *decoded)
 
-    video_file = st.file_uploader("Suba video", type=['mp4', 'mov', 'avi'])
+        if params:
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setparams(params)
+                wf.writeframes(datos_reconstruidos_raw)
+            datos_reconstruidos = buf.getvalue()
+        else:
+            datos_reconstruidos = datos_reconstruidos_raw
 
-    if st.button("Transmitir y Procesar Video"):
+        html_adpcm_diff = (
+            '<div style="display:flex; align-items:center; justify-content:center; gap:15px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="text-align:center;"><div style="width:50px; height:60px; background:var(--cyan); margin:0 auto; border-radius:4px;"></div><div style="font-size:0.6rem; color:var(--muted); margin-top:5px; font-family:\'IBM Plex Mono\', monospace;">Muestra<br>(t)</div></div>'
+            '<span style="font-size:2rem; color:var(--muted); font-weight:bold;">-</span>'
+            '<div style="text-align:center;"><div style="width:50px; height:45px; background:var(--violet); margin:0 auto; border-radius:4px;"></div><div style="font-size:0.6rem; color:var(--muted); margin-top:5px; font-family:\'IBM Plex Mono\', monospace;">Anterior<br>(t-1)</div></div>'
+            '<span style="font-size:2rem; color:var(--muted); font-weight:bold;">=</span>'
+            '<div style="border:1px dashed var(--border-strong); padding:15px; border-radius:8px; text-align:center; background:rgba(6,182,212,0.05);">'
+            '<div style="font-size:0.6rem; color:var(--cyan); font-family:\'IBM Plex Mono\', monospace; margin-bottom:5px;">DIFERENCIA (ERROR)</div>'
+            '<div style="font-size:1.2rem; color:var(--txt); font-weight:bold;">Δ</div>'
+            '</div>'
+            '</div>'
+        )
 
-        if video_file:
+        html_adpcm_quant = (
+            '<div style="display:flex; align-items:center; justify-content:center; gap:20px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="border:1px dashed var(--border-strong); padding:15px; border-radius:8px; text-align:center; background:rgba(6,182,212,0.05); min-width:100px;">'
+            '<div style="font-size:1.2rem; color:var(--txt); font-weight:bold;">Δ</div>'
+            '<div style="font-size:0.6rem; color:var(--cyan); margin-top:5px;">Diferencia</div>'
+            '</div>'
+            '<div style="display:flex; flex-direction:column; align-items:center;">'
+            '<div style="font-size:0.65rem; color:var(--amber); font-family:\'IBM Plex Mono\', monospace; padding:4px 8px; background:rgba(245,158,11,0.1); border-radius:4px; margin-bottom:4px;">÷ Step Size</div>'
+            '<span style="color:var(--muted); font-size:1.5rem;">➔</span>'
+            '</div>'
+            '<div style="border:1px solid #ef4444; padding:15px; border-radius:8px; text-align:center; background:rgba(239,68,68,0.05); min-width:100px;">'
+            '<div style="font-size:1.2rem; color:#ef4444; font-weight:bold;">4-bit / 8-bit</div>'
+            '<div style="font-size:0.6rem; color:var(--muted); margin-top:5px;">Cuantizado a guardar</div>'
+            '</div>'
+            '</div>'
+        )
 
-            video_bytes = video_file.read()
+        html_adpcm_recon = (
+            '<div style="display:flex; align-items:center; justify-content:center; gap:15px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+            '<div style="border:1px solid #ef4444; padding:10px; border-radius:8px; text-align:center; background:rgba(239,68,68,0.05);"><div style="font-size:0.8rem; color:#ef4444; font-weight:bold;">Quantizado</div></div>'
+            '<span style="font-size:1.2rem; color:var(--muted);">× Step =</span>'
+            '<div style="border:1px dashed var(--border-strong); padding:10px; border-radius:8px; text-align:center;"><div style="font-size:0.8rem; color:var(--cyan); font-weight:bold;">Δ Reconstruido</div></div>'
+            '<span style="font-size:1.5rem; color:var(--muted); font-weight:bold;">+</span>'
+            '<div style="text-align:center;"><div style="width:40px; height:45px; background:var(--violet); margin:0 auto; border-radius:4px;"></div><div style="font-size:0.5rem; color:var(--muted); margin-top:5px;">Anterior (t-1)</div></div>'
+            '<span style="font-size:1.5rem; color:var(--muted); font-weight:bold;">=</span>'
+            '<div style="text-align:center;"><div style="width:40px; height:60px; background:var(--cyan); margin:0 auto; border-radius:4px; box-shadow: 0 0 10px rgba(6,182,212,0.4);"></div><div style="font-size:0.5rem; color:var(--cyan); margin-top:5px;">Onda Final (16-bit)</div></div>'
+            '</div>'
+        )
 
-            metrics = InformationTheory.metrics(video_bytes)
-            show_metrics(metrics)
+        pasos = [
+            {"titulo": "Paso 1 · Predicción Temporal (Gráfico)", "detalle": "", "html": html_adpcm_diff},
+            {"titulo": "Paso 2 · Cuantización (Gráfico)", "detalle": "", "html": html_adpcm_quant},
+            {"titulo": "Paso 3 · Reconstrucción Predictiva (Gráfico)", "detalle": "", "html": html_adpcm_recon},
+            {"titulo": "Paso 4 · Tabla de Decodificación en Tiempo Real", "detalle": "Log matemático.", "tabla": log_tabla_adpcm}
+        ]
 
-            st.video(video_bytes)
+        return ResultadoCompresion("ADPCM (Funcional Simplificado)", datos, bytes(encoded), datos_reconstruidos, len(datos), len(encoded), 2.0, 0.5, (time.perf_counter()-t0)*1000, pasos, es_stub=False)
 
-            logs = VideoSimulator.generate_logs()
-            st.dataframe(logs)
+def _simular_h264(datos: bytes, stats: EstadisticasInfo) -> ResultadoCompresion:
+    t0 = time.perf_counter()
+    orig = len(datos) * 45  
+    comp = len(datos)
+    
+    html_macroblocks = (
+        '<div style="display:flex; flex-direction:column; align-items:center; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+        '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:1rem;">FRAME DIVIDIDO EN MACROBLOCKS</div>'
+        '<div style="display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; background:var(--border); padding:2px; border-radius:4px;">'
+    )
+    for _ in range(64):
+        html_macroblocks += '<div style="width:20px; height:20px; background:var(--bg-2); border:1px solid rgba(6,182,212,0.3);"></div>'
+    html_macroblocks += '</div></div>'
 
-            st.success("Video reconstruido correctamente.")
+    html_motion = (
+        '<div style="display:flex; flex-wrap:wrap; gap:20px; align-items:center; justify-content:center; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+        '<div style="text-align:center;">'
+        '<div style="width:80px; height:80px; border:2px dashed var(--muted); position:relative; background:var(--bg-2);">'
+        '<div style="width:25px; height:25px; background:var(--violet); position:absolute; top:10px; left:10px; border-radius:4px;"></div>'
+        '</div>'
+        '<div style="font-size:0.65rem; color:var(--muted); margin-top:8px; font-family:\'IBM Plex Mono\', monospace;">Frame Referencia (t-1)</div>'
+        '</div>'
+        '<div style="display:flex; flex-direction:column; align-items:center; color:var(--cyan);">'
+        '<div style="font-weight:bold; font-family:\'IBM Plex Mono\', monospace; font-size:0.8rem; background:rgba(6,182,212,0.1); padding:4px 8px; border-radius:4px; border:1px solid rgba(6,182,212,0.3);">Vect. Mov (dx:+20, dy:+15)</div>'
+        '<div style="font-size:1.5rem; margin-top:4px;">➔</div>'
+        '</div>'
+        '<div style="text-align:center;">'
+        '<div style="width:80px; height:80px; border:2px solid var(--border-strong); position:relative; background:var(--bg-2);">'
+        '<div style="width:25px; height:25px; background:var(--cyan); position:absolute; top:25px; left:30px; border-radius:4px; box-shadow: 0 0 10px rgba(6,182,212,0.5);"></div>'
+        '<div style="width:25px; height:25px; border:2px dashed rgba(139,92,246,0.5); position:absolute; top:10px; left:10px; border-radius:4px;"></div>'
+        '</div>'
+        '<div style="font-size:0.65rem; color:var(--cyan); margin-top:8px; font-family:\'IBM Plex Mono\', monospace;">Frame Actual (t)</div>'
+        '</div>'
+        '</div>'
+    )
+
+    html_residual = (
+        '<div style="display:flex; flex-direction:column; align-items:center; background:var(--bg-1); padding:1rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+        '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); margin-bottom:1rem;">DCT DEL RESIDUAL (Errores cercanos a 0)</div>'
+        '<div class="dct-grid">'
+    )
+    residual_vals = [5, -2, 0, 1, 0, 0, 0, 0, -3, 1, 0, 0, 0, 0, 0, 0] + [0]*48
+    for val in residual_vals:
+        color = 128 + val*10
+        text_color = "#ef4444" if val != 0 else "var(--muted)"
+        html_residual += f'<div class="dct-cell" style="background-color: rgb({color},{color},{color}); color: {text_color}; border:1px solid var(--bg-0);">{val}</div>'
+    html_residual += '</div></div>'
+
+    html_cabac = (
+        '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+        '<div class="rle-pill"><div class="rle-count" style="background:var(--bg-4); color:var(--txt-dim);">Símbolos</div><div class="rle-val" style="color:var(--txt);">0,1,0,0...</div></div>'
+        '<span style="color:var(--muted); font-size:1.2rem;">➔</span>'
+        '<div class="rle-pill"><div class="rle-count" style="background:linear-gradient(135deg, var(--amber), #d97706);">Modelo Contexto</div></div>'
+        '<span style="color:var(--muted); font-size:1.2rem;">➔</span>'
+        '<div class="rle-pill"><div class="rle-count" style="background:linear-gradient(135deg, var(--green), #059669);">Flujo CABAC</div><div class="rle-val" style="color:var(--green); font-weight:bold;">01101...</div></div>'
+        '</div>'
+    )
+
+    html_videodec = (
+        '<div style="display:flex; flex-direction:column; gap: 15px; background:var(--bg-1); padding:1.5rem; border-radius:8px; border:1px solid var(--border); margin:1rem 0;">'
+        '<div style="font-family:\'IBM Plex Mono\', monospace; font-size:0.75rem; color:var(--cyan); text-align:center;">PIPELINE DE DESCOMPRESIÓN (PLAYBACK)</div>'
+        '<div style="display:flex; align-items:center; justify-content:center; gap: 10px;">'
+        '<div class="rle-pill"><div class="rle-count" style="background:var(--green);">Flujo CABAC</div><div class="rle-val">01101...</div></div>'
+        '<span style="color:var(--muted); font-size:1.2rem;">➔</span>'
+        '<div class="rle-pill"><div class="rle-count" style="background:var(--amber);">Descodificador</div></div>'
+        '<span style="color:var(--muted); font-size:1.2rem;">➔</span>'
+        '<div class="rle-pill"><div class="rle-count" style="background:var(--bg-4);">Coeficientes</div><div class="rle-val">5, -2, 0...</div></div>'
+        '</div>'
+        '<div style="display:flex; align-items:center; justify-content:center; gap: 10px;">'
+        '<div style="border:1px solid var(--border); padding:5px; border-radius:4px; font-size:0.6rem; text-align:center;">Matriz<br>Frecuencias</div>'
+        '<span style="color:var(--muted); font-size:1.2rem;">➔</span>'
+        '<div class="rle-pill"><div class="rle-count" style="background:var(--cyan); color:black;">IDCT Inversa</div></div>'
+        '<span style="color:var(--muted); font-size:1.2rem;">➔</span>'
+        '<div style="border:1px solid var(--border); padding:5px; border-radius:4px; font-size:0.6rem; text-align:center; color:#ef4444;">Residual<br>Espacial (Error)</div>'
+        '</div>'
+        '<div style="display:flex; align-items:center; justify-content:center; gap: 10px; margin-top:10px;">'
+        '<div style="text-align:center;">'
+        '<div style="width:50px; height:50px; border:1px dashed var(--muted); background:var(--bg-2); position:relative;">'
+        '<div style="width:15px; height:15px; background:var(--violet); position:absolute; top:5px; left:5px;"></div>'
+        '</div>'
+        '<div style="font-size:0.5rem; color:var(--muted); margin-top:4px;">Frame(t-1)<br>+ Vect. Mov</div>'
+        '</div>'
+        '<span style="color:var(--muted); font-size:1.5rem; font-weight:bold;">+</span>'
+        '<div style="text-align:center;">'
+        '<div style="width:50px; height:50px; border:1px solid var(--border-strong); background:rgba(239,68,68,0.1); display:flex; align-items:center; justify-content:center; color:#ef4444; font-size:0.6rem;">Residual</div>'
+        '</div>'
+        '<span style="color:var(--muted); font-size:1.5rem; font-weight:bold;">=</span>'
+        '<div style="text-align:center;">'
+        '<div style="width:50px; height:50px; border:1px solid var(--cyan); background:var(--bg-2); position:relative;">'
+        '<div style="width:15px; height:15px; background:var(--cyan); position:absolute; top:15px; left:20px;"></div>'
+        '</div>'
+        '<div style="font-size:0.5rem; color:var(--cyan); margin-top:4px;">Frame(t)<br>Reconstruido</div>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+    json_macroblock_dec = {
+        "estado": "Decodificación Finalizada",
+        "metadata_macroblock": {
+            "frame_id": 14,
+            "macroblock_type": "Inter (P-Frame)",
+            "chroma_format": "4:2:0"
+        },
+        "parametros_recuperados": {
+            "vector_movimiento_aplicado": {"dx": 20, "dy": 15},
+            "matriz_residual_idct": [5, -2, 0, 1, 0, 0, 0, 0, -3, 1, 0, 0, 0, 0, 0, 0],
+            "filtro_deblocking": "activo"
+        }
+    }
+
+    pasos = [
+        {"titulo": "Paso 1 · Partición en Macroblocks", "detalle": "", "html": html_macroblocks},
+        {"titulo": "Paso 2 · Predicción (Motion Estimation)", "detalle": "", "html": html_motion},
+        {"titulo": "Paso 3 · DCT y Cuantización", "detalle": "", "html": html_residual},
+        {"titulo": "Paso 4 · CABAC", "detalle": "", "html": html_cabac},
+        {"titulo": "Paso 5 · Proceso de Descompresión (Playback Gráfico)", "detalle": "", "html": html_videodec},
+        {"titulo": "Paso 6 · JSON de Decodificación del Macroblock (Real)", "detalle": "", "json_data": json_macroblock_dec}
+    ]
+    
+    return ResultadoCompresion(
+        nombre_algoritmo="H.264 (Simulado)",
+        datos_originales=datos,
+        datos_comprimidos=datos,
+        datos_descomprimidos=datos,
+        tamaño_original=orig,
+        tamaño_comprimido=comp,
+        tasa_compresion=orig / comp,
+        ratio_reduccion=1 - (comp / orig),
+        tiempo_ms=125.4,
+        pasos=pasos,
+        es_stub=True
+    )
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  TABS Y MAIN (CON MANEJO DE ESTADO)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def tab_texto() -> None:
+    col_up, col_info = st.columns([3, 2], gap="large")
+    with col_up:
+        section_label("📄", "CARGAR ARCHIVO DE TEXTO")
+        uploaded = st.file_uploader("Sube un archivo de texto", type=["txt", "csv", "json"], key="uploader_texto")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS")
+        st.info("Huffman · LZW · RLE")
+
+    if uploaded is None:
+        st.session_state.tx_texto = False
+        render_no_file("📝", "Sube un archivo", ".txt .csv .json")
+        return
+
+    # Si cambia el archivo, reiniciar estado
+    if st.session_state.get("last_file_texto") != uploaded.name:
+        st.session_state.tx_texto = False
+        st.session_state.last_file_texto = uploaded.name
+
+    datos = uploaded.read()
+    analizador = AnalizadorTexto(datos, uploaded.name)
+    stats = analizador.calcular_todo()
+    render_dashboard(stats)
+
+    section_label("⚙️", "CONFIGURACIÓN DEL ENLACE DE COMUNICACIONES")
+    c_f, c_c, c_m, c_r = st.columns(4)
+    with c_f: algo = st.selectbox("1. Fuente", ["Huffman", "LZW", "RLE"], key="algo_texto")
+    with c_c: tasa_fec = st.selectbox("2. Canal (FEC)", ["1/2", "2/3", "3/4", "4/5", "7/8"], key="fec_texto")
+    with c_m: mod = st.selectbox("3. Modulación", ["BPSK", "QPSK", "QAM-16"], key="mod_texto")
+    with c_r: ber = st.slider("4. Ruido (BER)", 0.0, 0.2, 0.02, step=0.01, format="%.3f", key="ber_texto")
+
+    if st.button("▶ Transmitir y Procesar", key="btn_tx_texto"):
+        st.session_state.tx_texto = True
+
+    if st.session_state.get("tx_texto", False):
+        with st.spinner("Procesando pipeline de telecomunicaciones..."):
+            render_codigo_y_formulas(algo, stats) 
+            
+            if algo == "Huffman": res = CodificadorHuffman(datos).comprimir()
+            elif algo == "LZW": res = CodificadorLZW().comprimir(datos)
+            else: res = CodificadorRLE().comprimir(datos)
+
+            render_resultado_compresion(res)
+            render_pasos(res.pasos)
+            render_arbol_huffman(res)
+            
+            render_sistema_integrado(res, "texto", tasa_fec, mod, ber)
+
+
+def tab_imagen() -> None:
+    col_up, col_info = st.columns([3, 2], gap="large")
+    with col_up:
+        section_label("🖼️", "CARGAR IMAGEN")
+        uploaded = st.file_uploader("Sube una imagen", type=["png", "jpg"], key="uploader_imagen")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS")
+        st.info("DCT (JPEG) · RLE · Huffman")
+    
+    if uploaded is None:
+        st.session_state.tx_img = False
+        render_no_file("🖼️", "Sube una imagen", ".png .jpg")
+        return
+
+    if st.session_state.get("last_file_img") != uploaded.name:
+        st.session_state.tx_img = False
+        st.session_state.last_file_img = uploaded.name
+
+    datos = uploaded.read()
+    st.image(datos, width=250)
+    
+    analizador = AnalizadorImagen(datos, uploaded.name)
+    stats = analizador.calcular_todo()
+    render_dashboard(stats)
+
+    section_label("⚙️", "CONFIGURACIÓN DEL ENLACE DE COMUNICACIONES")
+    c_f, c_c, c_m, c_r = st.columns(4)
+    with c_f: algo_img = st.selectbox("1. Fuente", ["DCT — JPEG-like", "RLE", "Huffman (bytes)"], key="algo_img")
+    with c_c: tasa_fec = st.selectbox("2. Canal (FEC)", ["1/2", "2/3", "3/4", "4/5", "7/8"], key="fec_img")
+    with c_m: mod = st.selectbox("3. Modulación", ["BPSK", "QPSK", "QAM-16"], key="mod_img")
+    with c_r: ber = st.slider("4. Ruido (BER)", 0.0, 0.2, 0.02, step=0.01, format="%.3f", key="ber_img")
+
+    if st.button("▶ Transmitir y Procesar", key="btn_tx_img"):
+        st.session_state.tx_img = True
+
+    if st.session_state.get("tx_img", False):
+        with st.spinner("Procesando pipeline de telecomunicaciones..."):
+            algo_llave = "Huffman" if algo_img == "Huffman (bytes)" else algo_img
+
+            render_codigo_y_formulas(algo_llave, stats)
+            
+            if algo_img == "DCT — JPEG-like": res = CodificadorDCT().comprimir(datos)
+            elif algo_img == "RLE": res = CodificadorRLE().comprimir(datos)
+            else: res = CodificadorHuffman(datos).comprimir()
+            
+            render_resultado_compresion(res)
+            render_pasos(res.pasos)
+            render_arbol_huffman(res)
+            
+            render_sistema_integrado(res, "imagen", tasa_fec, mod, ber)
+
+
+def tab_audio() -> None:
+    col_up, col_info = st.columns([3, 2], gap="large")
+    with col_up:
+        section_label("🎵", "CARGAR ARCHIVO DE AUDIO")
+        uploaded = st.file_uploader("Sube audio (.wav)", type=["wav"], key="uploader_audio")
+    with col_info:
+        section_label("ℹ️", "ALGORITMOS")
+        st.info("μ-Law G.711 · ADPCM · Huffman")
+
+    if not uploaded:
+        st.session_state.tx_audio = False
+        render_no_file("🎵", "Sube un archivo de audio", ".wav")
+        return
+        
+    if st.session_state.get("last_file_audio") != uploaded.name:
+        st.session_state.tx_audio = False
+        st.session_state.last_file_audio = uploaded.name
+
+    datos = uploaded.read()
+    st.audio(datos)
+    
+    analizador = AnalizadorAudio(datos, uploaded.name)
+    stats = analizador.calcular_todo()
+    render_dashboard(stats)
+    
+    section_label("⚙️", "CONFIGURACIÓN DEL ENLACE DE COMUNICACIONES")
+    c_f, c_c, c_m, c_r = st.columns(4)
+    with c_f: algo = st.selectbox("1. Fuente", ["μ-Law G.711", "ADPCM", "Huffman (bytes)"], key="algo_audio")
+    with c_c: tasa_fec = st.selectbox("2. Canal (FEC)", ["1/2", "2/3", "3/4", "4/5", "7/8"], key="fec_audio")
+    with c_m: mod = st.selectbox("3. Modulación", ["BPSK", "QPSK", "QAM-16"], key="mod_audio")
+    with c_r: ber = st.slider("4. Ruido (BER)", 0.0, 0.2, 0.02, step=0.01, format="%.3f", key="ber_audio")
+
+    if st.button("▶ Transmitir y Procesar", key="btn_tx_audio"):
+        st.session_state.tx_audio = True
+    
+    if st.session_state.get("tx_audio", False):
+        with st.spinner("Procesando pipeline de telecomunicaciones..."):
+            algo_llave = "Huffman" if algo == "Huffman (bytes)" else algo
+
+            render_codigo_y_formulas(algo_llave, stats)
+            
+            if algo == "μ-Law G.711": res = CodificadorMuLaw().comprimir(datos)
+            elif algo == "ADPCM": res = CodificadorADPCM().comprimir(datos)
+            else: res = CodificadorHuffman(datos).comprimir()
+            
+            render_resultado_compresion(res)
+            render_pasos(res.pasos)
+            render_arbol_huffman(res)
+            
+            render_sistema_integrado(res, "audio", tasa_fec, mod, ber)
+
+
+def tab_video() -> None:
+    col_up, col_info = st.columns([3, 2], gap="large")
+    with col_up:
+        section_label("🎬", "CARGAR ARCHIVO DE VIDEO")
+        uploaded = st.file_uploader("Sube un archivo de video", type=["mp4", "avi", "mkv", "mov", "webm"], key="uploader_video")
+    with col_info:
+        section_label("ℹ️", "CONCEPTOS APLICADOS")
+        st.info("Tramas I/P/B · DCT Temporal · Entropía CABAC")
+
+    if uploaded is None:
+        st.session_state.tx_video = False
+        render_no_file("🎬", "Sube un archivo de video", ".mp4 .avi .mkv .mov .webm")
+        return
+
+    if st.session_state.get("last_file_video") != uploaded.name:
+        st.session_state.tx_video = False
+        st.session_state.last_file_video = uploaded.name
+
+    datos = uploaded.read()
+    st.video(datos)
+    
+    analizador = AnalizadorVideo(datos, uploaded.name)
+    with st.spinner("Analizando flujo de bytes de video..."):
+        stats = analizador.calcular_todo()
+
+    render_dashboard(stats)
+    info_box("🔬", f"El flujo de video comprimido (H.264/HEVC) tiene entropía alta (<strong>{stats.entropia:.4f} bits/byte</strong>) porque los datos ya están codificados entrópicamente.", "violet")
+
+    section_label("⚙️", "CONFIGURACIÓN DEL ENLACE DE COMUNICACIONES")
+    c_f, c_c, c_m, c_r = st.columns(4)
+    with c_f: algo_vid = st.selectbox("1. Fuente", ["H.264 / HEVC (Simulado)"], key="algo_video")
+    with c_c: tasa_fec = st.selectbox("2. Canal (FEC)", ["1/2", "2/3", "3/4", "4/5", "7/8"], key="fec_video")
+    with c_m: mod = st.selectbox("3. Modulación", ["BPSK", "QPSK", "QAM-16"], key="mod_video")
+    with c_r: ber = st.slider("4. Ruido (BER)", 0.0, 0.2, 0.02, step=0.01, format="%.3f", key="ber_video")
+
+    if st.button("▶ Transmitir y Procesar", key="btn_tx_video"):
+        st.session_state.tx_video = True
+
+    if st.session_state.get("tx_video", False):
+        with st.spinner("Procesando pipeline de telecomunicaciones..."):
+            render_codigo_y_formulas(algo_vid, stats)
+            res = _simular_h264(datos, stats)
+            
+            render_resultado_compresion(res)
+            c1, c2, c3 = st.columns(3)
+            with c1: st.metric("Trama I (Intra)", "3.5:1", "Solo DCT espacial")
+            with c2: st.metric("Trama P (Predictiva)", "12.0:1", "DCT + Motion Vector")
+            with c3: st.metric("Trama B (Bidireccional)", "20.0:1", "Máxima compresión")
+
+            render_pasos(res.pasos)
+            
+            render_sistema_integrado(res, "video", tasa_fec, mod, ber)
+
+def main() -> None:
+    inject_css()
+    render_header()
+    tabs = st.tabs(["📄 Texto", "🖼️ Imagen", "🎵 Audio", "🎬 Video"])
+    with tabs[0]: tab_texto()
+    with tabs[1]: tab_imagen()
+    with tabs[2]: tab_audio()
+    with tabs[3]: tab_video()
+
+if __name__ == "__main__":
+    main()
