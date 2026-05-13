@@ -1,3 +1,4 @@
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -7,73 +8,44 @@ import json
 import base64
 import io
 import wave
-import random
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+
 from collections import Counter
+from dataclasses import dataclass, field
 from scipy.fftpack import dct, idct
 from PIL import Image
 
-# Manejo seguro de Graphviz
 try:
     import graphviz
     GRAPHVIZ_AVAILABLE = True
-except ImportError:
+except:
     GRAPHVIZ_AVAILABLE = False
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  PAGE CONFIG Y CSS
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Multimedia Telecom Lab", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Telecom Multimedia Simulator", layout="wide")
 
-st.markdown("""
-<style>
-    .stApp{background:#0a0a0f;color:#e0e0e0;}
-    h1,h2,h3{color:#00ffff;}
-    div[data-testid='metric-container']{background:#111827;border:1px solid #9d4edd;border-radius:12px;padding:12px;}
-    code{color:#00ffff; background: #111827;}
-    html,body,[class*='css']{font-family:'Courier New', monospace;}
-    table{color:white;}
-    .dl-btn { display: inline-block; background: linear-gradient(135deg, #9d4edd 0%, #7b2cbf 100%); color: white !important; padding: 0.55rem 2rem; border-radius: 10px; font-weight: 700; text-decoration: none; font-size: 0.85rem; box-shadow: 0 2px 12px rgba(157,78,221,0.2); transition: all 0.2s ease; margin-top: 10px; text-align: center; width: 100%;}
-    .dl-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(157,78,221,0.4); text-decoration: none; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown("<style>.stApp{background:#0b1020;color:#00ffff;} h1,h2,h3{color:#c77dff;} div[data-testid='metric-container']{background:#111827;border:1px solid cyan;padding:12px;border-radius:12px;} </style>", unsafe_allow_html=True)
 
-st.title("📡 Multimedia Transmission Simulator")
-st.caption("Pipeline completo: Fuente → Codificación de Canal (FEC) → Modulación → AWGN → Recepción")
+st.title("📡 Telecom Multimedia Simulator")
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  CORE CLASSES
-# ─────────────────────────────────────────────────────────────────────────────
-@dataclass
-class InformationMetrics:
-    entropy: float
-    avg_length: float
-    efficiency: float
-    redundancy: float
+# =====================================================
+# UTILIDADES
+# =====================================================
 
-class InformationTheory:
-    @staticmethod
-    def calculate_entropy(data_bytes):
-        counter = Counter(data_bytes)
-        total = len(data_bytes)
-        probs = [v / total for v in counter.values()]
-        entropy = -sum(p * np.log2(p) for p in probs)
-        return entropy, counter
+def create_download_link(data_bytes, filename):
+    b64 = base64.b64encode(data_bytes).decode()
+    return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="padding:12px;background:cyan;color:black;border-radius:10px;text-decoration:none;">⬇ Descargar BIN</a>'
 
-    @staticmethod
-    def metrics(data_bytes):
-        entropy, _ = InformationTheory.calculate_entropy(data_bytes)
-        avg_length = 8
-        efficiency = (entropy / avg_length) if avg_length > 0 else 0
-        redundancy = 1 - efficiency
-        return InformationMetrics(entropy, avg_length, efficiency, redundancy)
+def bits_from_bytes(data):
+    return ''.join(format(b, '08b') for b in data)
 
-class SourceCoder(ABC):
-    @abstractmethod
-    def encode(self, data): pass
-    @abstractmethod
-    def decode(self, data, *args): pass
+def entropy(data):
+    counts = Counter(data)
+    total = len(data)
+    probs = [v/total for v in counts.values()]
+    return -sum(p*np.log2(p) for p in probs)
+
+# =====================================================
+# HUFFMAN
+# =====================================================
 
 @dataclass(order=True)
 class HuffmanNode:
@@ -82,326 +54,354 @@ class HuffmanNode:
     left: any = field(compare=False, default=None)
     right: any = field(compare=False, default=None)
 
-class HuffmanCoder(SourceCoder):
+class HuffmanCoder:
+
     def build_tree(self, text):
         freq = Counter(text)
         heap = [HuffmanNode(v, k) for k, v in freq.items()]
         heapq.heapify(heap)
+
         while len(heap) > 1:
             left = heapq.heappop(heap)
             right = heapq.heappop(heap)
+
             merged = HuffmanNode(left.freq + right.freq, None, left, right)
             heapq.heappush(heap, merged)
-        return heap[0] if heap else None, freq
+
+        return heap[0], freq
 
     def generate_codes(self, node, current='', codes=None):
-        if codes is None: codes = {}
-        if not node: return codes
-        if node.symbol is not None: codes[node.symbol] = current if current else "0"
-        if node.left: self.generate_codes(node.left, current + '0', codes)
-        if node.right: self.generate_codes(node.right, current + '1', codes)
+
+        if codes is None:
+            codes = {}
+
+        if node.symbol is not None:
+            codes[node.symbol] = current
+
+        if node.left:
+            self.generate_codes(node.left, current + '0', codes)
+
+        if node.right:
+            self.generate_codes(node.right, current + '1', codes)
+
         return codes
 
     def encode(self, text):
+
         tree, freq = self.build_tree(text)
         codes = self.generate_codes(tree)
+
         encoded = ''.join(codes[ch] for ch in text)
-        inverse = {v: k for k, v in codes.items()}
-        return encoded, codes, inverse, tree, freq
+
+        inverse = {v:k for k,v in codes.items()}
+
+        return encoded, inverse, tree, freq
 
     def decode(self, encoded, inverse):
+
         current = ''
-        decoded = []
+        output = ''
+
         for bit in encoded:
             current += bit
+
             if current in inverse:
-                decoded.append(inverse[current])
+                output += inverse[current]
                 current = ''
-        if isinstance(list(inverse.values())[0], int):
-            return bytes(decoded)
-        return ''.join(decoded)
 
-class LZWCoder(SourceCoder):
-    def encode(self, text):
-        dictionary = {chr(i): i for i in range(256)}
-        string = ''
-        code = 256
-        result = []
-        logs = []
-        for symbol in text:
-            temp = string + symbol
-            if temp in dictionary:
-                string = temp
-            else:
-                result.append(dictionary[string])
-                dictionary[temp] = code
-                logs.append({"entry": temp, "code": code})
-                code += 1
-                string = symbol
-        if string:
-            result.append(dictionary[string])
-        return result, dictionary, logs
+        return output
 
-    def decode(self, compressed, *args):
-        dictionary = {i: chr(i) for i in range(256)}
-        if not compressed: return ""
-        result = ""
-        prev = compressed[0]
-        result += dictionary[prev]
-        code = 256
-        for current in compressed[1:]:
-            if current in dictionary:
-                entry = dictionary[current]
-            elif current == code:
-                entry = dictionary[prev] + dictionary[prev][0]
-            else:
-                break
-            result += entry
-            dictionary[code] = dictionary[prev] + entry[0]
-            code += 1
-            prev = current
-        return result
-
-class RLECoder(SourceCoder):
-    def encode(self, text):
-        if not text: return []
-        encoded = []
-        i = 0
-        while i < len(text):
-            count = 1
-            while i + 1 < len(text) and text[i] == text[i + 1] and count < 255:
-                count += 1
-                i += 1
-            encoded.append((text[i], count))
-            i += 1
-        return encoded
-
-    def decode(self, data, *args):
-        if not data: return ""
-        if isinstance(data[0][0], int):
-            return bytes(sum(([ch] * count for ch, count in data), []))
-        return ''.join(ch * count for ch, count in data)
-
-class ChannelCoder:
-    def __init__(self, rate='1/2'):
-        self.rate = rate
-
-    def encode(self, bits):
-        if not bits: return ""
-        parity = ''.join('1' if bits[i:i+2].count('1') % 2 else '0' for i in range(0, len(bits), 2))
-        return bits + parity
-
-    def syndrome(self, original, received):
-        errors = []
-        corrected = list(received)
-        for i in range(min(len(original), len(received))):
-            if original[i] != received[i]:
-                errors.append({"Bit Index": i, "Original": original[i], "Recibido": received[i], "Acción": "Corregido"})
-                corrected[i] = original[i]
-        return ''.join(corrected), errors
+# =====================================================
+# MODULACIÓN
+# =====================================================
 
 class Modulator:
-    def __init__(self, scheme='BPSK'):
-        self.scheme = scheme
 
-    def modulate(self, bits):
-        if not bits: return np.array([])
-        if self.scheme == 'BPSK':
-            return np.array([1 if b == '1' else -1 for b in bits])
-        elif self.scheme == 'QPSK':
-            symbols = []
-            for i in range(0, len(bits), 2):
-                pair = bits[i:i+2].ljust(2, '0')
-                mapping = {'00': (-1, -1), '01': (-1, 1), '10': (1, -1), '11': (1, 1)}
-                symbols.append(mapping[pair])
-            return np.array(symbols)
-        elif self.scheme == 'QAM16':
-            levels = [-3, -1, 1, 3]
-            symbols = []
-            for i in range(0, len(bits), 4):
-                chunk = bits[i:i+4].ljust(4, '0')
-                i_val = levels[int(chunk[:2], 2)]
-                q_val = levels[int(chunk[2:], 2)]
-                symbols.append((i_val, q_val))
-            return np.array(symbols)
+    def bpsk(self, bits):
+        return np.array([1 if b == '1' else -1 for b in bits])
 
-    def add_awgn(self, signal, noise_level):
-        if len(signal) == 0: return signal
-        noise = np.random.normal(0, noise_level, signal.shape)
+    def add_noise(self, signal, sigma):
+        noise = np.random.normal(0, sigma, signal.shape)
         return signal + noise
 
-class DCTProcessor:
-    @staticmethod
-    def process(image_array):
-        gray = image_array.convert('L')
-        img_np = np.array(gray)
-        block = img_np[:8, :8] if img_np.shape[0] >= 8 and img_np.shape[1] >= 8 else np.zeros((8,8))
-        dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
-        quant = np.round(dct_block / 10)
-        recovered = idct(idct((quant * 10).T, norm='ortho').T, norm='ortho')
-        return block, dct_block, quant, recovered
+    def demodulate(self, noisy):
+        return ''.join(['1' if x > 0 else '0' for x in noisy])
 
-class ADPCMCodec:
-    def encode(self, samples):
-        prev = 0
-        encoded = []
-        logs = []
-        for i, s in enumerate(samples):
-            diff = int(s) - prev
-            q = int(diff / 256)
-            prev += q * 256
-            encoded.append(q & 0xFF)
-            if i < 15:
-                logs.append({"Sample Real": int(s), "Diferencia": diff, "Cuantizado": q, "Reconstruido": prev})
-        return np.array(encoded, dtype=np.uint8), logs
+# =====================================================
+# TEXTO
+# =====================================================
 
-    def decode(self, encoded):
-        prev = 0
-        decoded = []
-        for q in encoded:
-            q_signed = np.int8(q)
-            prev += int(q_signed) * 256
-            decoded.append(prev)
-        return np.array(decoded, dtype=np.int16)
+tab1, tab2, tab3, tab4 = st.tabs(["Texto", "Imagen", "Audio", "Video"])
 
-class MuLawCodec:
-    MU = 255
-    @staticmethod
-    def encode(samples):
-        samples = samples.astype(np.float32)
-        max_val = np.max(np.abs(samples)) if np.max(np.abs(samples)) > 0 else 1
-        normalized = samples / max_val
-        encoded = np.sign(normalized) * np.log1p(MuLawCodec.MU * np.abs(normalized)) / np.log1p(MuLawCodec.MU)
-        return ((encoded + 1) / 2 * 255).astype(np.uint8)
+with tab1:
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  HELPERS & UI
-# ─────────────────────────────────────────────────────────────────────────────
-def bits_from_bytes(data): return ''.join(format(byte, '08b') for byte in data)
-def bytes_from_bits(bits): return bytes([int(bits[i:i+8].ljust(8, '0'), 2) for i in range(0, len(bits), 8)])
+    st.header("📄 Texto")
 
-def create_download_link(data_bytes, filename):
-    b64 = base64.b64encode(data_bytes).decode()
-    return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" class="dl-btn">⬇️ Descargar {filename}</a>'
+    text = st.text_area("Ingrese texto")
 
-def show_metrics(metrics):
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Entropía (Shannon)", f"{metrics.entropy:.4f}")
-    c2.metric("Longitud Promedio", f"{metrics.avg_length:.4f}")
-    c3.metric("Eficiencia", f"{metrics.efficiency*100:.2f}%")
-    c4.metric("Redundancia", f"{metrics.redundancy*100:.2f}%")
+    noise = st.slider("Ruido AWGN", 0.0, 2.0, 0.3)
 
-def render_pipeline_canal(tx_bits_sample, modulo, canal, ber, identifier):
-    st.markdown("---")
-    st.subheader("📡 Enlace de Telecomunicaciones (Tx/Rx)")
-    fec_bits = canal.encode(tx_bits_sample)
-    signal = modulo.modulate(fec_bits)
-    noisy = modulo.add_awgn(signal, ber)
-    
-    rx_bits_list = list(fec_bits)
-    if ber > 0 and len(rx_bits_list) > 0:
-        if random.random() < ber: # Error probabilístico
-            err_idx = random.randint(0, len(rx_bits_list)-1)
-            rx_bits_list[err_idx] = '1' if rx_bits_list[err_idx] == '0' else '0'
-    rx_bits = "".join(rx_bits_list)
-    
-    corrected_bits, errors = canal.syndrome(fec_bits, rx_bits)
-    
-    c1, c2 = st.columns([1.5, 2])
-    with c1:
-        st.markdown(f"**Diagrama de Constelación ({modulo.scheme})**")
-        fig, ax = plt.subplots(figsize=(4, 3))
-        fig.patch.set_facecolor('#0a0a0f')
-        ax.set_facecolor('#111827')
-        ax.tick_params(colors='#8b9cb5')
-        for spine in ax.spines.values(): spine.set_edgecolor('#374151')
-        
-        if len(noisy) > 0:
-            if modulo.scheme == 'BPSK':
-                ax.scatter(noisy, np.zeros(len(noisy)), color='#00ffff', alpha=0.6, s=10)
-            else:
-                ax.scatter(noisy[:, 0], noisy[:, 1], color='#9d4edd', alpha=0.6, s=10)
-        st.pyplot(fig)
+    if st.button("Transmitir Texto"):
 
-    with c2:
-        st.markdown("**Control de Errores (Síndrome)**")
-        if not errors:
-            st.success("Transmisión limpia. El decodificador no detectó alteraciones.")
-        else:
-            st.warning("Se detectaron y corrigieron errores en la trama:")
-            st.dataframe(pd.DataFrame(errors), use_container_width=True)
+        if text:
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  TABS PRINCIPALES
-# ─────────────────────────────────────────────────────────────────────────────
-text_tab, image_tab, audio_tab, video_tab = st.tabs(["📝 Texto", "🖼 Imagen", "🎵 Audio", "🎬 Video"])
+            st.subheader("Métricas")
 
-with text_tab:
-    st.header("📄 Codificación y Transmisión de Texto")
-    text_input = st.text_area("Ingrese texto para transmitir", "Sistemas de telecomunicaciones avanzados.")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: algorithm = st.selectbox("1. Fuente", ["Huffman", "LZW", "RLE"], key="t_src")
-    with c2: rate = st.selectbox("2. Canal (FEC)", ["1/2", "2/3", "3/4"], key="t_chn")
-    with c3: modulation = st.selectbox("3. Modulación", ["BPSK", "QPSK", "QAM16"], key="t_mod")
-    with c4: ber = st.slider("4. Ruido AWGN", 0.0, 1.0, 0.1, key="t_ber")
+            H = entropy(text.encode())
 
-    if st.button("Transmitir Pipeline de Texto", type="primary"):
-        st.session_state.run_text = True
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Entropía", round(H,4))
+            c2.metric("Longitud promedio", 8)
+            c3.metric("Redundancia", round(1-(H/8),4))
 
-    if st.session_state.get("run_text", False) and text_input:
-        raw_bytes = text_input.encode('utf-8')
-        show_metrics(InformationTheory.metrics(raw_bytes))
-        
-        # Codificación de Fuente
-        if algorithm == "Huffman":
             coder = HuffmanCoder()
-            encoded, codes, inverse, tree, freq = coder.encode(text_input)
-            decoded = coder.decode(encoded, inverse)
-            tx_bits = encoded
-            col1, col2 = st.columns(2)
-            with col1: st.dataframe(pd.DataFrame(freq.items(), columns=["Símbolo", "Frecuencia"]), height=200)
-            with col2: st.json(inverse, expanded=False)
-            
-        elif algorithm == "LZW":
-            coder = LZWCoder()
-            compressed, dictionary, logs = coder.encode(text_input)
-            decoded = coder.decode(compressed)
-            tx_bits = ''.join(format(x, '016b') for x in compressed)
-            st.dataframe(pd.DataFrame(logs), height=200)
-            
-        else:
-            coder = RLECoder()
-            encoded = coder.encode(text_input)
-            decoded = coder.decode(encoded)
-            tx_bits = ''.join(format(ord(ch), '08b') + format(count, '08b') for ch, count in encoded)
-            st.dataframe(pd.DataFrame(encoded, columns=["Símbolo", "Repeticiones"]), height=200)
 
-        # Canal y Generación de Payload solicitado
-        canal_obj = ChannelCoder(rate)
-        fec = canal_obj.encode(tx_bits)
+            encoded, inverse, tree, freq = coder.encode(text)
 
-        payload = {
-            "algorithm": algorithm,
-            "modulation": modulation,
-            "original_text": text_input,
-            "tx_bits": fec
-        }
+            st.subheader("Tabla de Frecuencias")
 
-        bin_data = json.dumps(payload, indent=2).encode("utf-8")
+            st.dataframe(pd.DataFrame(freq.items(), columns=["Símbolo","Frecuencia"]))
 
-        st.markdown(
-            create_download_link(bin_data, 'text_tx.bin'),
-            unsafe_allow_html=True
-        )
-        
-        render_pipeline_canal(tx_bits[:1000], Modulator(modulation), canal_obj, ber, "texto")
-        
-        st.markdown("---")
-        st.success(f"**Texto Recuperado:** {decoded}")
+            if GRAPHVIZ_AVAILABLE:
 
-# (Las demás pestañas Imagen, Audio y Video se mantienen igual pero con validación de Graphviz si fuera necesario)
+                dot = graphviz.Digraph()
 
-with image_tab:
-    st.info("Sube una imagen para ver el procesamiento DCT o Huffman.")
-    # Implementación similar a la anterior...
+                def add_nodes(node, parent=None):
+
+                    node_id = str(id(node))
+
+                    label = f"{node.symbol}:{node.freq}" if node.symbol else str(node.freq)
+
+                    dot.node(node_id, label)
+
+                    if parent:
+                        dot.edge(parent, node_id)
+
+                    if node.left:
+                        add_nodes(node.left, node_id)
+
+                    if node.right:
+                        add_nodes(node.right, node_id)
+
+                add_nodes(tree)
+
+                st.graphviz_chart(dot)
+
+            else:
+                st.warning("Graphviz no disponible")
+
+            mod = Modulator()
+
+            tx = mod.bpsk(encoded)
+
+            noisy = mod.add_noise(tx, noise)
+
+            rx_bits = mod.demodulate(noisy)
+
+            corrected = list(rx_bits)
+
+            errors = []
+
+            for i in range(min(len(encoded), len(rx_bits))):
+
+                if encoded[i] != rx_bits[i]:
+
+                    errors.append({
+                        "posición": i,
+                        "tx": encoded[i],
+                        "rx": rx_bits[i]
+                    })
+
+                    corrected[i] = encoded[i]
+
+            corrected_bits = ''.join(corrected)
+
+            decoded = coder.decode(corrected_bits, inverse)
+
+            st.subheader("Diagrama de dispersión")
+
+            fig, ax = plt.subplots()
+            ax.scatter(noisy, np.zeros(len(noisy)))
+            ax.set_title("Constelación BPSK")
+            st.pyplot(fig)
+
+            st.subheader("Errores detectados/corregidos")
+
+            st.dataframe(pd.DataFrame(errors))
+
+            st.subheader("Texto Recuperado")
+
+            st.success(decoded)
+
+            payload = {
+                "tipo":"texto",
+                "algoritmo":"Huffman",
+                "original":text,
+                "bits_tx":encoded,
+                "bits_rx":corrected_bits
+            }
+
+            st.markdown(create_download_link(json.dumps(payload, indent=2).encode(), "texto_tx.bin"), unsafe_allow_html=True)
+
+# =====================================================
+# IMAGEN
+# =====================================================
+
+with tab2:
+
+    st.header("🖼 Imagen")
+
+    image_file = st.file_uploader("Suba imagen", type=["png","jpg","jpeg"])
+
+    if st.button("Transmitir Imagen"):
+
+        if image_file:
+
+            image = Image.open(image_file)
+
+            st.image(image, caption="Original")
+
+            gray = image.convert("L")
+
+            arr = np.array(gray)
+
+            block = arr[:8,:8]
+
+            dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
+
+            quant = np.round(dct_block/10)
+
+            recovered = idct(idct((quant*10).T, norm='ortho').T, norm='ortho')
+
+            st.subheader("Bloque 8x8")
+            st.dataframe(pd.DataFrame(block))
+
+            st.subheader("DCT")
+            st.dataframe(pd.DataFrame(np.round(dct_block,2)))
+
+            st.subheader("Cuantización")
+            st.dataframe(pd.DataFrame(quant))
+
+            st.subheader("IDCT Recuperada")
+            st.dataframe(pd.DataFrame(np.round(recovered,2)))
+
+            recovered_img = Image.fromarray(np.clip(recovered,0,255).astype(np.uint8))
+
+            st.image(recovered_img, caption="Recuperada")
+
+            payload = {
+                "tipo":"imagen",
+                "dct":"ok",
+                "shape":str(arr.shape)
+            }
+
+            st.markdown(create_download_link(json.dumps(payload).encode(), "imagen_tx.bin"), unsafe_allow_html=True)
+
+# =====================================================
+# AUDIO
+# =====================================================
+
+with tab3:
+
+    st.header("🎵 Audio")
+
+    audio_file = st.file_uploader("Suba WAV", type=["wav"])
+
+    if st.button("Transmitir Audio"):
+
+        if audio_file:
+
+            audio_bytes = audio_file.read()
+
+            st.audio(audio_bytes)
+
+            wav_buffer = io.BytesIO(audio_bytes)
+
+            with wave.open(wav_buffer, 'rb') as wav:
+
+                params = wav.getparams()
+
+                frames = wav.readframes(params.nframes)
+
+            samples = np.frombuffer(frames, dtype=np.int16)
+
+            st.subheader("Información WAV")
+
+            st.json({
+                "channels": params.nchannels,
+                "framerate": params.framerate,
+                "frames": params.nframes
+            })
+
+            encoded = []
+
+            prev = 0
+
+            logs = []
+
+            for s in samples[:500]:
+
+                diff = int(s) - prev
+
+                q = int(diff / 256)
+
+                prev += q * 256
+
+                encoded.append(q)
+
+                logs.append({
+                    "sample": int(s),
+                    "diff": diff,
+                    "quantized": q,
+                    "reconstructed": prev
+                })
+
+            st.subheader("Logs ADPCM")
+
+            st.dataframe(pd.DataFrame(logs))
+
+            payload = {
+                "tipo":"audio",
+                "codec":"ADPCM",
+                "samples":len(samples)
+            }
+
+            st.markdown(create_download_link(json.dumps(payload).encode(), "audio_tx.bin"), unsafe_allow_html=True)
+
+# =====================================================
+# VIDEO
+# =====================================================
+
+with tab4:
+
+    st.header("🎬 Video")
+
+    video_file = st.file_uploader("Suba video", type=["mp4","avi","mov"])
+
+    if st.button("Transmitir Video"):
+
+        if video_file:
+
+            video_bytes = video_file.read()
+
+            st.video(video_bytes)
+
+            st.markdown("<div style='padding:20px;border:1px solid cyan;border-radius:12px;background:#111827;'><h3 style='color:cyan;'>Macroblocks → Motion Estimation → Residual DCT → CABAC</h3></div>", unsafe_allow_html=True)
+
+            logs = pd.DataFrame([
+                {"macroblock":1, "vector":"(2,1)", "residual":12},
+                {"macroblock":2, "vector":"(-1,0)", "residual":7},
+                {"macroblock":3, "vector":"(0,3)", "residual":3}
+            ])
+
+            st.subheader("Vectores de Movimiento")
+
+            st.dataframe(logs)
+
+            payload = {
+                "tipo":"video",
+                "codec":"H264_SIM",
+                "macroblocks":3
+            }
+
+            st.markdown(create_download_link(json.dumps(payload).encode(), "video_tx.bin"), unsafe_allow_html=True)
