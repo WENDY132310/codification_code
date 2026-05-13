@@ -16,3 +16,11 @@ matplotlib>=3.8.0
 
 # Type hints backport (Python < 3.11)
 # typing_extensions>=4.9.0
+
+streamlit
+numpy
+pandas
+matplotlib
+scipy
+pillow
+graphviz
