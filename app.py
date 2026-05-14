@@ -297,7 +297,7 @@ with tab_aud:
                 ax.set_facecolor('#111827')
                 st.pyplot(fig)
             
-            tx_bits = ''.join(format(x & 0xFF, '08b') for x in encoded)
+            tx_bits = ''.join(format(x & 0xFF, '08b') for x in encoded.tolist())
             fec_bits = FEC_ChannelCoder(fec_aud).encode(tx_bits)
             
             meta = {"params": params._asdict(), "original_len": len(tx_bits), "samples_count": len(samples)}
