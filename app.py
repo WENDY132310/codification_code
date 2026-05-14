@@ -25,11 +25,11 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Multimedia Telecom Lab", layout="wide", page_icon="📡")
 
-STYLING = "<style>.stApp{background:#0a0a0f;color:#e0e0e0;} h1,h2,h3{color:#00ffff;} div[data-testid='metric-container']{background:#111827;border:1px solid #9d4edd;border-radius:12px;padding:12px;} code{color:#00ffff; background:#111827; border:1px solid #374151;} html,body,[class*='css']{font-family:'Courier New', monospace;} table{color:white;} .dl-btn{display:block; background:linear-gradient(135deg, #9d4edd 0%, #7b2cbf 100%); color:white !important; padding:10px; border-radius:8px; font-weight:bold; text-decoration:none; text-align:center; margin-top:10px; transition:0.3s;} .dl-btn:hover{box-shadow:0 0 15px #9d4edd;}</style>"
+STYLING = "<style>.stApp{background:#0a0a0f;color:#e0e0e0;} h1,h2,h3{color:#00ffff;} div[data-testid='metric-container']{background:#111827;border:1px solid #9d4edd;border-radius:12px;padding:12px;} code{color:#00ffff; background:#111827; border:1px solid #374151;} html,body,[class*='css']{font-family:'Courier New', monospace;} table{color:white;} .dl-btn{display:block; background:linear-gradient(135deg, #9d4edd 0%, #7b2cbf 100%); color:white !important; padding:10px; border-radius:8px; font-weight:bold; text-decoration:none; text-align:center; margin-top:10px; transition:0.3s;} .dl-btn:hover{box-shadow:0 0 15px #9d4edd;} .matrix-cell {display:inline-block; width:25px; height:25px; line-height:25px; text-align:center; border:1px solid #444; margin:1px; font-family:monospace; font-size:14px;} .data-bit {background-color:#1e3a8a;} .parity-bit {background-color:#065f46; font-weight:bold;} .error-bit {background-color:#991b1b; color:white; font-weight:bold; animation: blinker 1s linear infinite;} @keyframes blinker { 50% { opacity: 0; } }</style>"
 st.markdown(STYLING, unsafe_allow_html=True)
 
 st.title("📡 Laboratorio DSP: Multimedia a través del Canal")
-st.caption("Arquitectura Tx/Rx Completa con Análisis FEC Paso a Paso")
+st.caption("Arquitectura Tx/Rx Completa con Análisis FEC Matricial (2D Parity Check)")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RENDERIZADORES Y HERRAMIENTAS FÍSICAS
@@ -42,22 +42,6 @@ def create_download_link(payload_dict, filename):
     b64 = base64.b64encode(json_str.encode()).decode()
     return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" class="dl-btn">⬇ Descargar Payload .BIN ({filename})</a>'
 
-def render_matrix_grid(matrix):
-    html = "<div style='display:grid;grid-template-columns:repeat(8,minmax(25px,1fr));gap:2px;font-size:11px;text-align:center;'>"
-    for row in matrix:
-        for val in row: html += f"<div style='background:#111827;border:1px solid #9d4edd;padding:4px;'>{int(val)}</div>"
-    html += "</div>"
-    return html
-
-def render_error_map(original, received, max_bits=600):
-    html = "<div style='font-family:monospace; font-size:14px; background:#111827; padding:10px; border:1px solid #374151; border-radius:8px; word-break:break-all; max-height:200px; overflow-y:auto;'>"
-    for o, r in zip(original[:max_bits], received[:max_bits]):
-        if o == r: html += f"<span style='color:#00ffff;'>{r}</span>"
-        else: html += f"<span style='color:#ff0033; font-weight:bold; background:#4a0000; padding:0 2px;'>{r}</span>"
-    if len(original) > max_bits: html += "<span style='color:gray;'> ... (truncado)</span>"
-    html += "</div>"
-    return html
-
 def inject_bit_errors(bits, ber):
     if ber <= 0: return bits
     bit_list = list(bits)
@@ -66,19 +50,12 @@ def inject_bit_errors(bits, ber):
         bit_list[idx] = '1' if bit_list[idx] == '0' else '0'
     return "".join(bit_list)
 
-def recommend_modulation(fec_rate):
-    """Recomienda modulación basado en la robustez del FEC"""
-    k, n = map(int, fec_rate.split('/'))
-    ratio = k / n
-    if ratio <= 0.5:
-        return "💡 **Recomendación (QAM-16)**: Tu FEC es muy fuerte (alta redundancia). El sistema soportará los errores, así que puedes usar una modulación más densa y rápida."
-    elif ratio <= 0.8:
-        return "💡 **Recomendación (QPSK)**: Tu FEC tiene redundancia media. QPSK ofrece un balance ideal entre velocidad de transmisión y protección contra ruido."
-    else:
-        return "💡 **Recomendación (BPSK)**: Tu FEC es débil (casi no hay paridad). Necesitas la modulación más robusta físicamente para compensar la falta de escudo matemático."
+def recommend_modulation(matrix_size):
+    """Recomienda modulación basado en el tamaño de la matriz FEC"""
+    return "💡 **Recomendación**: La Paridad 2D es muy robusta para detectar y corregir errores simples. Se recomienda QPSK para un balance de velocidad, o BPSK en canales muy ruidosos."
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CORE: MODULACIÓN, FUENTE Y CANAL (FEC)
+# CORE: MODULACIÓN, FUENTE Y CANAL (FEC 2D MATRICIAL)
 # ─────────────────────────────────────────────────────────────────────────────
 class Modulator:
     def __init__(self, scheme): self.scheme = scheme
@@ -143,41 +120,128 @@ class MuLawCodec:
         s_exp = np.sign(s_norm) * (1 / MuLawCodec.MU) * (np.power(1 + MuLawCodec.MU, np.abs(s_norm)) - 1)
         return np.int16(s_exp * 32767.0)
 
-class FEC_ChannelCoder:
-    def __init__(self, rate_str): 
-        self.rate_str = rate_str
-        self.k, self.n = map(int, rate_str.split('/'))
-        self.p = self.n - self.k
+# NUEVO CODIFICADOR FEC MATRICIAL 2D
+class MatrixFEC:
+    def __init__(self, cols=4):
+        self.cols = cols # Número de columnas de datos (ancho de la matriz)
+    
+    def calculate_parity(self, bit_string):
+        """Calcula paridad par (1 si hay cantidad impar de 1s, 0 si no)"""
+        return '1' if bit_string.count('1') % 2 != 0 else '0'
 
     def encode(self, bits):
-        if not bits: return "", []
-        encoded = ""
-        logs = []
-        for i in range(0, len(bits), self.k):
-            block = bits[i:i+self.k].ljust(self.k, '0')
-            ones_count = block.count('1')
-            parity = "".join(str((ones_count + j) % 2) for j in range(self.p))
+        if not bits: return "", [], ""
+        
+        # Pad bits para que sean múltiplo de las columnas
+        padding_needed = (self.cols - (len(bits) % self.cols)) % self.cols
+        padded_bits = bits + ('0' * padding_needed)
+        
+        rows = len(padded_bits) // self.cols
+        matrix = []
+        encoded_stream = ""
+        visual_html = "<div style='margin-bottom: 10px;'>"
+        
+        # Llenar matriz y calcular paridad de filas
+        col_parities = ['0'] * self.cols
+        
+        for r in range(rows):
+            row_data = padded_bits[r*self.cols : (r+1)*self.cols]
+            row_parity = self.calculate_parity(row_data)
+            matrix.append(list(row_data) + [row_parity])
             
-            if len(logs) < 5: # Guardamos logs de las primeras 5 matrices para mostrar
-                logs.append({"Matriz de Datos (k)": block, "Bits Paridad (n-k)": parity, "Trama Tx (n)": block + parity})
+            # Dibujar Fila HTML
+            for bit in row_data: visual_html += f"<span class='matrix-cell data-bit'>{bit}</span>"
+            visual_html += f"<span class='matrix-cell parity-bit'>{row_parity}</span><br>"
+            
+            # Acumular para paridad de columnas
+            for c in range(self.cols):
+                if row_data[c] == '1': col_parities[c] = '0' if col_parities[c] == '1' else '1'
                 
-            encoded += block + parity
-        return encoded, logs
-        
-    def decode_syndrome(self, original_fec, received_bits):
-        errors, corrected = [], list(received_bits)
-        for i in range(min(len(original_fec), len(received_bits))):
-            if original_fec[i] != received_bits[i]:
-                errors.append({
-                    "Coordenada Bit": i, 
-                    "Síndrome Apunta": received_bits[i], 
-                    "Destrucción Error": f"NOT({received_bits[i]}) ➔ {original_fec[i]}"
-                })
-                corrected[i] = original_fec[i]
-        
-        source_bits = "".join("".join(corrected[i:i+self.k]) for i in range(0, len(corrected), self.n))
-        return source_bits, errors
+            encoded_stream += row_data + row_parity
 
+        # Calcular paridad del bit maestro
+        master_parity = self.calculate_parity("".join(col_parities))
+        
+        # Dibujar Fila Final de Paridades HTML
+        for cp in col_parities: visual_html += f"<span class='matrix-cell parity-bit'>{cp}</span>"
+        visual_html += f"<span class='matrix-cell parity-bit' style='background-color:#9333ea;'>{master_parity}</span><br></div>"
+        
+        encoded_stream += "".join(col_parities) + master_parity
+        
+        return encoded_stream, matrix, visual_html, padding_needed
+
+    def decode_and_correct(self, rx_stream, padding_needed):
+        """Recibe la trama, reconstruye la matriz, halla el síndrome y corrige"""
+        if not rx_stream: return "", "", []
+        
+        row_len = self.cols + 1 # Datos + Paridad
+        # Calculamos cuántas filas de datos hay (sin contar la fila final de paridad)
+        num_data_rows = (len(rx_stream) // row_len) - 1 
+        
+        rx_matrix = []
+        idx = 0
+        
+        # 1. Reconstruir Matriz Recibida
+        for r in range(num_data_rows + 1): # Incluye la fila de paridades de columna
+            rx_matrix.append(list(rx_stream[idx : idx + row_len]))
+            idx += row_len
+
+        # 2. Calcular Síndromes (Detectar Errores)
+        error_row = -1
+        error_col = -1
+        
+        syndrome_logs = []
+
+        # Chequear Filas
+        for r in range(num_data_rows):
+            row_data = "".join(rx_matrix[r][:-1])
+            expected_parity = self.calculate_parity(row_data)
+            received_parity = rx_matrix[r][-1]
+            if expected_parity != received_parity:
+                error_row = r
+                syndrome_logs.append(f"❌ **Síndrome Fila {r}:** XOR Falló. Debería ser {expected_parity}, llegó {received_parity}.")
+        
+        # Chequear Columnas
+        for c in range(self.cols):
+            col_data = "".join([rx_matrix[r][c] for r in range(num_data_rows)])
+            expected_parity = self.calculate_parity(col_data)
+            received_parity = rx_matrix[-1][c]
+            if expected_parity != received_parity:
+                error_col = c
+                syndrome_logs.append(f"❌ **Síndrome Columna {c}:** XOR Falló. Debería ser {expected_parity}, llegó {received_parity}.")
+
+        # 3. Dibujar Matriz y Corregir
+        visual_html = "<div>"
+        correction_log = "✅ Síndrome 0: Trama limpia."
+        
+        # ¿Hay un error de coordenada cruzada?
+        if error_row != -1 and error_col != -1:
+            bad_bit = rx_matrix[error_row][error_col]
+            corrected_bit = '0' if bad_bit == '1' else '1'
+            correction_log = f"🎯 **Destrucción de Error:** Coordenada ({error_row}, {error_col}). Aplicando compuerta NOT al bit `{bad_bit}` ➔ `{corrected_bit}`."
+            rx_matrix[error_row][error_col] = corrected_bit # ¡Corregido!
+
+        for r in range(len(rx_matrix)):
+            for c in range(len(rx_matrix[r])):
+                is_error_cell = (r == error_row and c == error_col)
+                css_class = "error-bit" if is_error_cell else ("parity-bit" if c == self.cols or r == num_data_rows else "data-bit")
+                val = rx_matrix[r][c]
+                visual_html += f"<span class='matrix-cell {css_class}'>{val}</span>"
+            visual_html += "<br>"
+        visual_html += "</div>"
+
+        # 4. Extraer datos limpios
+        clean_bits = ""
+        for r in range(num_data_rows):
+            clean_bits += "".join(rx_matrix[r][:-1])
+            
+        # Remover el padding añadido en Tx
+        if padding_needed > 0:
+            clean_bits = clean_bits[:-padding_needed]
+
+        return clean_bits, visual_html, syndrome_logs, correction_log
+
+# Helpers DCT para la Imagen Completa
 def process_full_image_dct(img_arr):
     h, w = img_arr.shape
     h_pad, w_pad = (8 - h % 8) % 8, (8 - w % 8) % 8
@@ -208,27 +272,28 @@ with tab_txt:
     with col_tx:
         st.markdown("### 📤 Módulo Transmisor")
         c1, c2, c3 = st.columns(3)
-        with c2: fec_txt = st.selectbox("Tasa FEC (k/n)", ["1/2", "1/3", "4/5", "7/8", "10/12"], key="tx_fec")
-        st.info(recommend_modulation(fec_txt))
+        with c2: fec_cols = st.selectbox("Ancho Matriz FEC", [4, 8, 16], index=0, key="tx_fec")
+        st.info(recommend_modulation(fec_cols))
         with c1: mod_txt = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="tx_mod")
         with c3: ber_txt = st.slider("BER AWGN", 0.0, 1.0, 0.0, key="tx_ber")
         
-        text_input = st.text_area("Payload:", "SYS_CORE_READY: 0x9A")
+        text_input = st.text_area("Payload:", "HOLA")
         
         if st.button("Ejecutar Pipeline Tx", type="primary"):
             tx_bits, inverse, tree, freqs = HuffmanCoder().encode(text_input)
-            meta = {"inverse": inverse, "alg": "Huffman", "original_len": len(tx_bits)}
             
-            with st.expander("🛡️ Armadura Matemática (Inserción FEC)", expanded=True):
-                fec_bits, tx_logs = FEC_ChannelCoder(fec_txt).encode(tx_bits)
-                st.write(f"Cortando en bloques de $k$ bits y añadiendo la matriz de paridad:")
-                st.dataframe(pd.DataFrame(tx_logs), use_container_width=True)
+            with st.expander("🛡️ Armadura Matemática (Inserción FEC 2D)", expanded=True):
+                st.write(f"Empaquetando datos en matrices de {fec_cols} columnas y calculando paridad cruzada (Verde = Paridad, Morado = Paridad Maestra):")
+                fec = MatrixFEC(cols=fec_cols)
+                fec_bits, _, tx_html, padding = fec.encode(tx_bits)
+                st.markdown(tx_html, unsafe_allow_html=True)
             
             with st.expander("📡 Modulación y AWGN", expanded=True):
                 mod = Modulator(mod_txt)
                 st.pyplot(mod.render_constellation(mod.channel_awgn(mod.modulate(fec_bits), ber_txt)))
             
-            payload = {"modulo": "texto", "metadata": meta, "fec_rate": fec_txt, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_txt)}
+            meta = {"inverse": inverse, "alg": "Huffman", "cols": fec_cols, "padding": padding}
+            payload = {"modulo": "texto", "metadata": meta, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_txt)}
             st.markdown(create_download_link(payload, "texto.bin"), unsafe_allow_html=True)
 
     with col_rx:
@@ -236,20 +301,26 @@ with tab_txt:
         rx_file = st.file_uploader("Sube .bin", type=["bin", "json"], key="rx_txt")
         if rx_file:
             data = json.load(rx_file)
-            with st.expander("🛠️ Destrucción de Errores (FEC)", expanded=True):
-                st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
-                source_bits, errors = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if errors:
-                    st.warning("¡Síndrome Detectado! Apuntando a coordenadas y forzando compuerta NOT...")
-                    st.dataframe(pd.DataFrame(errors[:5]), use_container_width=True)
             
-            with st.expander("🧩 Decodificación", expanded=True):
-                source_bits = source_bits[:data["metadata"]["original_len"]]
+            with st.expander("🛠️ Destrucción de Errores (Síndromes FEC)", expanded=True):
+                fec = MatrixFEC(cols=data["metadata"]["cols"])
+                source_bits, rx_html, syndromes, correction = fec.decode_and_correct(data["rx_bits"], data["metadata"]["padding"])
+                
+                c_a, c_b = st.columns(2)
+                with c_a:
+                    st.markdown("**Matriz Recibida y Análisis:**")
+                    st.markdown(rx_html, unsafe_allow_html=True)
+                with c_b:
+                    st.markdown("**Logs de CPU:**")
+                    for s in syndromes: st.write(s)
+                    st.success(correction)
+            
+            with st.expander("🧩 Decodificación Entrópica", expanded=True):
                 try:
                     res, logs = HuffmanCoder().decode_visual_log(source_bits, data["metadata"]["inverse"])
                     st.markdown(f"> **OUTPUT:** `{res}`")
                 except Exception:
-                    st.error("Error: Bits dañados permanentemente.")
+                    st.error("Error: Bits dañados permanentemente más allá de la capacidad de la matriz.")
 
 # ================= IMAGEN =================
 with tab_img:
@@ -257,22 +328,23 @@ with tab_img:
     with col_tx_img:
         st.markdown("### 📤 Compresión Espacial")
         c_i1, c_i2 = st.columns(2)
-        with c_i1: fec_img = st.selectbox("FEC", ["4/5", "1/2", "7/8", "10/12"], key="tx_img_fec")
+        with c_i1: fec_img_cols = st.selectbox("Ancho Matriz FEC", [4, 8, 16], key="tx_img_fec")
         with c_i2: ber_img = st.slider("BER", 0.0, 1.0, 0.0, key="tx_img_ber")
-        st.info(recommend_modulation(fec_img))
         
         img_file = st.file_uploader("Sube Imagen", type=["png", "jpg"])
         if st.button("Ejecutar DCT Global", type="primary") and img_file:
             img_raw = Image.open(img_file).convert("L")
-            img_raw.thumbnail((128, 128)) 
+            img_raw.thumbnail((64, 64)) # Aún más pequeño para la pesada matriz 2D
             img_arr = np.array(img_raw)
             
             dct_blocks, padded_shape = process_full_image_dct(img_arr)
             tx_bits = ''.join(format(int(abs(x)), '08b') for x in dct_blocks.flatten())
-            fec_bits, _ = FEC_ChannelCoder(fec_img).encode(tx_bits)
             
-            meta = {"signs": np.sign(dct_blocks).flatten().tolist(), "orig_h": img_arr.shape[0], "orig_w": img_arr.shape[1], "pad_h": padded_shape[0], "pad_w": padded_shape[1], "original_len": len(tx_bits)}
-            payload = {"modulo": "imagen", "metadata": meta, "fec_rate": fec_img, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_img)}
+            fec = MatrixFEC(cols=fec_img_cols)
+            fec_bits, _, _, padding = fec.encode(tx_bits)
+            
+            meta = {"signs": np.sign(dct_blocks).flatten().tolist(), "orig_h": img_arr.shape[0], "orig_w": img_arr.shape[1], "pad_h": padded_shape[0], "pad_w": padded_shape[1], "cols": fec_img_cols, "padding": padding}
+            payload = {"modulo": "imagen", "metadata": meta, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_img)}
             st.markdown(create_download_link(payload, "imagen.bin"), unsafe_allow_html=True)
 
     with col_rx_img:
@@ -281,21 +353,22 @@ with tab_img:
         if rx_file_img:
             data = json.load(rx_file_img)
             with st.expander("🛠️ Bloque Físico FEC"):
-                st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
-                source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if err: st.error(f"Síndromes disparados: {len(err)} bits destructivos neutralizados por compuerta NOT.")
+                fec = MatrixFEC(cols=data["metadata"]["cols"])
+                source_bits, rx_html, syndromes, correction = fec.decode_and_correct(data["rx_bits"], data["metadata"]["padding"])
+                if syndromes: st.error("Síndromes detectados. Reparación matricial ejecutada en background.")
             
-            source_bits = source_bits[:data["metadata"]["original_len"]]
             with st.expander("🧩 Renderizado Final", expanded=True):
                 try:
                     vals = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
+                    # Manejar truncamiento por padding de imagen vs bytes
+                    vals = vals[:(data["metadata"]["pad_h"] * data["metadata"]["pad_w"])]
                     quant_rx = (np.array(vals) * np.array(data["metadata"]["signs"])).reshape((data["metadata"]["pad_h"], data["metadata"]["pad_w"]))
                     
                     rec_arr = reconstruct_full_image_idct(quant_rx, data["metadata"]["orig_h"], data["metadata"]["orig_w"])
                     st.success("Reconstrucción Exitosa")
                     st.image(Image.fromarray(rec_arr), caption="Imagen Reconstruida en Rx", use_column_width=True)
                 except Exception as e:
-                    st.error("Error: Destrucción total por ruido. Bits estructurales perdidos.")
+                    st.error(f"Error: Destrucción total por ruido. ({e})")
 
 # ================= AUDIO =================
 with tab_aud:
@@ -303,9 +376,8 @@ with tab_aud:
     with col_tx_aud:
         st.markdown("### 📤 Companding $\mu$-Law")
         c_a1, c_a2 = st.columns(2)
-        with c_a1: fec_aud = st.selectbox("FEC", ["1/2", "4/5", "7/8"], key="tx_aud_fec")
+        with c_a1: fec_aud_cols = st.selectbox("Ancho Matriz FEC", [4, 8, 16], key="tx_aud_fec")
         with c_a2: ber_aud = st.slider("BER", 0.0, 1.0, 0.0, key="tx_aud_ber")
-        st.info(recommend_modulation(fec_aud))
         
         aud_file = st.file_uploader("Sube Audio WAV", type=["wav"])
         if st.button("Ejecutar Pipeline Audio", type="primary") and aud_file:
@@ -317,10 +389,11 @@ with tab_aud:
             encoded = MuLawCodec.encode(samples)
             
             tx_bits = ''.join(format(x & 0xFF, '08b') for x in encoded.tolist())
-            fec_bits, _ = FEC_ChannelCoder(fec_aud).encode(tx_bits)
+            fec = MatrixFEC(cols=fec_aud_cols)
+            fec_bits, _, _, padding = fec.encode(tx_bits)
             
-            meta = {"params": params._asdict(), "original_len": len(tx_bits), "samples_count": len(samples)}
-            payload = {"modulo": "audio", "metadata": meta, "fec_rate": fec_aud, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_aud)}
+            meta = {"params": params._asdict(), "cols": fec_aud_cols, "padding": padding}
+            payload = {"modulo": "audio", "metadata": meta, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_aud)}
             st.markdown(create_download_link(payload, "audio.bin"), unsafe_allow_html=True)
 
     with col_rx_aud:
@@ -329,11 +402,10 @@ with tab_aud:
         if rx_file_aud:
             data = json.load(rx_file_aud)
             with st.expander("🛠️ Bloque Físico FEC"):
-                st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"], 300), unsafe_allow_html=True)
-                source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if err: st.warning(f"Corregidos {len(err)} crujidos electromagnéticos.")
+                fec = MatrixFEC(cols=data["metadata"]["cols"])
+                source_bits, rx_html, syndromes, correction = fec.decode_and_correct(data["rx_bits"], data["metadata"]["padding"])
+                if syndromes: st.warning(f"Se corrigieron anomalías detectadas por síndromes matriciales.")
             
-            source_bits = source_bits[:data["metadata"]["original_len"]]
             with st.expander("🧩 Reproducción DAC", expanded=True):
                 try:
                     rx_bytes = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
@@ -352,11 +424,10 @@ with tab_aud:
 with tab_vid:
     col_tx_vid, col_rx_vid = st.columns(2)
     with col_tx_vid:
-        st.markdown("### 📤 Protección de Cabecera (NAL)")
+        st.markdown("### 📤 Protección de Cabecera NAL")
         c_v1, c_v2 = st.columns(2)
-        with c_v1: fec_vid = st.selectbox("FEC", ["1/2", "4/5", "7/8"], key="tx_vid_fec")
+        with c_v1: fec_vid_cols = st.selectbox("Ancho Matriz FEC", [4, 8, 16], key="tx_vid_fec")
         with c_v2: ber_vid = st.slider("BER", 0.0, 1.0, 0.0, key="tx_vid_ber")
-        st.info(recommend_modulation(fec_vid))
         
         vid_file = st.file_uploader("Sube Video MP4", type=["mp4", "mov"])
         if vid_file:
@@ -369,14 +440,15 @@ with tab_vid:
                 body_bytes = vid_bytes[250:]
                 
                 tx_bits = bytes_to_bits(header_bytes)
-                fec_bits, fec_logs = FEC_ChannelCoder(fec_vid).encode(tx_bits)
+                fec = MatrixFEC(cols=fec_vid_cols)
+                fec_bits, _, tx_html, padding = fec.encode(tx_bits)
                 
                 with st.expander("🛡️ Proceso FEC de la Cabecera MP4", expanded=True):
-                    st.write("Protegiendo el Atom Header del MP4 mediante adición de paridad:")
-                    st.dataframe(pd.DataFrame(fec_logs))
+                    st.write("Protegiendo la metadata del contenedor (Atoms) con la Matriz de Paridad Cruzada:")
+                    st.markdown(tx_html, unsafe_allow_html=True)
                 
-                meta = {"body_b64": base64.b64encode(body_bytes).decode('utf-8'), "original_len": len(tx_bits)}
-                payload = {"modulo": "video", "metadata": meta, "fec_rate": fec_vid, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_vid)}
+                meta = {"body_b64": base64.b64encode(body_bytes).decode('utf-8'), "cols": fec_vid_cols, "padding": padding}
+                payload = {"modulo": "video", "metadata": meta, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_vid)}
                 st.markdown(create_download_link(payload, "video.bin"), unsafe_allow_html=True)
 
     with col_rx_vid:
@@ -385,20 +457,22 @@ with tab_vid:
         if rx_file_vid:
             data = json.load(rx_file_vid)
             
-            with st.expander("🛠️ Destrucción de Errores de Cabecera"):
-                source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if err:
-                    st.warning(f"¡Atención! {len(err)} errores atacaron la cabecera MP4.")
-                    st.dataframe(pd.DataFrame(err[:5]))
+            with st.expander("🛠️ Reparación Matricial de Cabecera"):
+                fec = MatrixFEC(cols=data["metadata"]["cols"])
+                source_bits, rx_html, syndromes, correction = fec.decode_and_correct(data["rx_bits"], data["metadata"]["padding"])
+                if syndromes:
+                    st.warning("Síndromes no nulos. Intersectando coordenadas y reparando Atoms MP4...")
+                    st.success(correction)
             
-            source_bits = source_bits[:data["metadata"]["original_len"]]
             try:
+                # Recortamos a múltiplo de 8 para evitar errores de parseo binario tras quitar el padding
+                source_bits = source_bits[:len(source_bits) - (len(source_bits)%8)]
                 header_rx = bits_to_bytes(source_bits)
                 body_rx = base64.b64decode(data["metadata"]["body_b64"])
                 full_video = header_rx + body_rx
                 
-                st.success("Reconstrucción Exitosa: Cabecera NAL restaurada, reproduciendo.")
+                st.success("Reconstrucción Exitosa: Cabecera NAL intacta.")
                 st.markdown("#### Video Recibido (Destino)")
                 st.video(full_video)
-            except Exception:
-                st.error("Video Corrupto: El reproductor HTML5 no puede leer el archivo. El ruido destruyó los átomos MP4.")
+            except Exception as e:
+                st.error(f"Video Corrupto: El reproductor HTML5 no puede leer el archivo. El ruido destruyó la estructura. ({e})")
