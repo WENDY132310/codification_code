@@ -375,3 +375,4 @@ with tab_vid:
                 st.video(full_video)
             except Exception:
                 st.error("Video Corrupto: El reproductor HTML5 no puede leer el archivo. El ruido destruyó los átomos MP4.")
+                
