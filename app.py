@@ -318,7 +318,7 @@ with tab_aud:
             with st.expander("🧩 Reproducción DAC", expanded=True):
                 try:
                     rx_bytes = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
-                    decoded_pcm = MuLawCodec.decode(np.array(rx_bytes, dtype=np.int8))
+                    decoded_pcm = MuLawCodec.decode(np.array(rx_bytes, dtype=np.uint8).astype(np.int8))
                     
                     out_buffer = io.BytesIO()
                     with wave.open(out_buffer, 'wb') as wav_out:
