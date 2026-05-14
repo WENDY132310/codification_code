@@ -29,7 +29,7 @@ STYLING = "<style>.stApp{background:#0a0a0f;color:#e0e0e0;} h1,h2,h3{color:#00ff
 st.markdown(STYLING, unsafe_allow_html=True)
 
 st.title("📡 Laboratorio DSP: Multimedia a través del Canal")
-st.caption("Arquitectura Tx/Rx Completa con Reconstrucción Real de Audio y Video")
+st.caption("Arquitectura Tx/Rx Completa con Análisis FEC Paso a Paso")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RENDERIZADORES Y HERRAMIENTAS FÍSICAS
@@ -65,6 +65,17 @@ def inject_bit_errors(bits, ber):
         idx = random.randint(0, len(bit_list)-1)
         bit_list[idx] = '1' if bit_list[idx] == '0' else '0'
     return "".join(bit_list)
+
+def recommend_modulation(fec_rate):
+    """Recomienda modulación basado en la robustez del FEC"""
+    k, n = map(int, fec_rate.split('/'))
+    ratio = k / n
+    if ratio <= 0.5:
+        return "💡 **Recomendación (QAM-16)**: Tu FEC es muy fuerte (alta redundancia). El sistema soportará los errores, así que puedes usar una modulación más densa y rápida."
+    elif ratio <= 0.8:
+        return "💡 **Recomendación (QPSK)**: Tu FEC tiene redundancia media. QPSK ofrece un balance ideal entre velocidad de transmisión y protección contra ruido."
+    else:
+        return "💡 **Recomendación (BPSK)**: Tu FEC es débil (casi no hay paridad). Necesitas la modulación más robusta físicamente para compensar la falta de escudo matemático."
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CORE: MODULACIÓN, FUENTE Y CANAL (FEC)
@@ -139,20 +150,29 @@ class FEC_ChannelCoder:
         self.p = self.n - self.k
 
     def encode(self, bits):
-        if not bits: return ""
+        if not bits: return "", []
         encoded = ""
+        logs = []
         for i in range(0, len(bits), self.k):
             block = bits[i:i+self.k].ljust(self.k, '0')
             ones_count = block.count('1')
             parity = "".join(str((ones_count + j) % 2) for j in range(self.p))
+            
+            if len(logs) < 5: # Guardamos logs de las primeras 5 matrices para mostrar
+                logs.append({"Matriz de Datos (k)": block, "Bits Paridad (n-k)": parity, "Trama Tx (n)": block + parity})
+                
             encoded += block + parity
-        return encoded
+        return encoded, logs
         
     def decode_syndrome(self, original_fec, received_bits):
         errors, corrected = [], list(received_bits)
         for i in range(min(len(original_fec), len(received_bits))):
             if original_fec[i] != received_bits[i]:
-                errors.append({"Índice": i, "Bloque": f"Nº {i//self.n}", "Recibido": received_bits[i], "Corrección": "Compuerta NOT"})
+                errors.append({
+                    "Coordenada Bit": i, 
+                    "Síndrome Apunta": received_bits[i], 
+                    "Destrucción Error": f"NOT({received_bits[i]}) ➔ {original_fec[i]}"
+                })
                 corrected[i] = original_fec[i]
         
         source_bits = "".join("".join(corrected[i:i+self.k]) for i in range(0, len(corrected), self.n))
@@ -188,8 +208,9 @@ with tab_txt:
     with col_tx:
         st.markdown("### 📤 Módulo Transmisor")
         c1, c2, c3 = st.columns(3)
-        with c1: mod_txt = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="tx_mod")
         with c2: fec_txt = st.selectbox("Tasa FEC (k/n)", ["1/2", "1/3", "4/5", "7/8", "10/12"], key="tx_fec")
+        st.info(recommend_modulation(fec_txt))
+        with c1: mod_txt = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="tx_mod")
         with c3: ber_txt = st.slider("BER AWGN", 0.0, 1.0, 0.0, key="tx_ber")
         
         text_input = st.text_area("Payload:", "SYS_CORE_READY: 0x9A")
@@ -197,7 +218,11 @@ with tab_txt:
         if st.button("Ejecutar Pipeline Tx", type="primary"):
             tx_bits, inverse, tree, freqs = HuffmanCoder().encode(text_input)
             meta = {"inverse": inverse, "alg": "Huffman", "original_len": len(tx_bits)}
-            fec_bits = FEC_ChannelCoder(fec_txt).encode(tx_bits)
+            
+            with st.expander("🛡️ Armadura Matemática (Inserción FEC)", expanded=True):
+                fec_bits, tx_logs = FEC_ChannelCoder(fec_txt).encode(tx_bits)
+                st.write(f"Cortando en bloques de $k$ bits y añadiendo la matriz de paridad:")
+                st.dataframe(pd.DataFrame(tx_logs), use_container_width=True)
             
             with st.expander("📡 Modulación y AWGN", expanded=True):
                 mod = Modulator(mod_txt)
@@ -211,10 +236,12 @@ with tab_txt:
         rx_file = st.file_uploader("Sube .bin", type=["bin", "json"], key="rx_txt")
         if rx_file:
             data = json.load(rx_file)
-            with st.expander("🛠️ Control de Errores", expanded=True):
+            with st.expander("🛠️ Destrucción de Errores (FEC)", expanded=True):
                 st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
                 source_bits, errors = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if errors: st.dataframe(pd.DataFrame(errors[:5]))
+                if errors:
+                    st.warning("¡Síndrome Detectado! Apuntando a coordenadas y forzando compuerta NOT...")
+                    st.dataframe(pd.DataFrame(errors[:5]), use_container_width=True)
             
             with st.expander("🧩 Decodificación", expanded=True):
                 source_bits = source_bits[:data["metadata"]["original_len"]]
@@ -232,6 +259,7 @@ with tab_img:
         c_i1, c_i2 = st.columns(2)
         with c_i1: fec_img = st.selectbox("FEC", ["4/5", "1/2", "7/8", "10/12"], key="tx_img_fec")
         with c_i2: ber_img = st.slider("BER", 0.0, 1.0, 0.0, key="tx_img_ber")
+        st.info(recommend_modulation(fec_img))
         
         img_file = st.file_uploader("Sube Imagen", type=["png", "jpg"])
         if st.button("Ejecutar DCT Global", type="primary") and img_file:
@@ -241,7 +269,7 @@ with tab_img:
             
             dct_blocks, padded_shape = process_full_image_dct(img_arr)
             tx_bits = ''.join(format(int(abs(x)), '08b') for x in dct_blocks.flatten())
-            fec_bits = FEC_ChannelCoder(fec_img).encode(tx_bits)
+            fec_bits, _ = FEC_ChannelCoder(fec_img).encode(tx_bits)
             
             meta = {"signs": np.sign(dct_blocks).flatten().tolist(), "orig_h": img_arr.shape[0], "orig_w": img_arr.shape[1], "pad_h": padded_shape[0], "pad_w": padded_shape[1], "original_len": len(tx_bits)}
             payload = {"modulo": "imagen", "metadata": meta, "fec_rate": fec_img, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_img)}
@@ -255,7 +283,7 @@ with tab_img:
             with st.expander("🛠️ Bloque Físico FEC"):
                 st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
                 source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if err: st.error(f"Síndromes disparados: {len(err)} bits reparados.")
+                if err: st.error(f"Síndromes disparados: {len(err)} bits destructivos neutralizados por compuerta NOT.")
             
             source_bits = source_bits[:data["metadata"]["original_len"]]
             with st.expander("🧩 Renderizado Final", expanded=True):
@@ -277,6 +305,7 @@ with tab_aud:
         c_a1, c_a2 = st.columns(2)
         with c_a1: fec_aud = st.selectbox("FEC", ["1/2", "4/5", "7/8"], key="tx_aud_fec")
         with c_a2: ber_aud = st.slider("BER", 0.0, 1.0, 0.0, key="tx_aud_ber")
+        st.info(recommend_modulation(fec_aud))
         
         aud_file = st.file_uploader("Sube Audio WAV", type=["wav"])
         if st.button("Ejecutar Pipeline Audio", type="primary") and aud_file:
@@ -287,18 +316,8 @@ with tab_aud:
             samples = np.frombuffer(frames, dtype=np.int16)
             encoded = MuLawCodec.encode(samples)
             
-            with st.expander("📦 Oscilograma (Original vs Cuantizado)"):
-                fig, ax = plt.subplots(figsize=(6,2))
-                ax.plot(samples[:200], label="PCM 16-bit", alpha=0.7)
-                # FIX DEL OVERFLOW: Convertimos a int32 antes de multiplicar por 256
-                ax.plot(encoded[:200].astype(np.int32) * 256, label="μ-Law 8-bit", alpha=0.7)
-                ax.legend()
-                fig.patch.set_facecolor('#0a0a0f')
-                ax.set_facecolor('#111827')
-                st.pyplot(fig)
-            
             tx_bits = ''.join(format(x & 0xFF, '08b') for x in encoded.tolist())
-            fec_bits = FEC_ChannelCoder(fec_aud).encode(tx_bits)
+            fec_bits, _ = FEC_ChannelCoder(fec_aud).encode(tx_bits)
             
             meta = {"params": params._asdict(), "original_len": len(tx_bits), "samples_count": len(samples)}
             payload = {"modulo": "audio", "metadata": meta, "fec_rate": fec_aud, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_aud)}
@@ -334,35 +353,43 @@ with tab_vid:
     col_tx_vid, col_rx_vid = st.columns(2)
     with col_tx_vid:
         st.markdown("### 📤 Protección de Cabecera (NAL)")
-        st.info("Dado el tamaño masivo de los videos, este laboratorio extrae y protege mediante FEC exclusivamente la cabecera del contenedor (MP4 Atoms). Si la cabecera sobrevive, el video se reproduce.")
         c_v1, c_v2 = st.columns(2)
         with c_v1: fec_vid = st.selectbox("FEC", ["1/2", "4/5", "7/8"], key="tx_vid_fec")
         with c_v2: ber_vid = st.slider("BER", 0.0, 1.0, 0.0, key="tx_vid_ber")
+        st.info(recommend_modulation(fec_vid))
         
         vid_file = st.file_uploader("Sube Video MP4", type=["mp4", "mov"])
-        if st.button("Transmitir Video", type="primary") and vid_file:
+        if vid_file:
+            st.markdown("#### Video Original (Transmisión)")
             vid_bytes = vid_file.read()
-            header_bytes = vid_bytes[:250]
-            body_bytes = vid_bytes[250:]
+            st.video(vid_bytes)
             
-            tx_bits = bytes_to_bits(header_bytes)
-            fec_bits = FEC_ChannelCoder(fec_vid).encode(tx_bits)
-            
-            meta = {
-                "body_b64": base64.b64encode(body_bytes).decode('utf-8'),
-                "original_len": len(tx_bits)
-            }
-            payload = {"modulo": "video", "metadata": meta, "fec_rate": fec_vid, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_vid)}
-            st.markdown(create_download_link(payload, "video.bin"), unsafe_allow_html=True)
+            if st.button("Transmitir Video", type="primary"):
+                header_bytes = vid_bytes[:250]
+                body_bytes = vid_bytes[250:]
+                
+                tx_bits = bytes_to_bits(header_bytes)
+                fec_bits, fec_logs = FEC_ChannelCoder(fec_vid).encode(tx_bits)
+                
+                with st.expander("🛡️ Proceso FEC de la Cabecera MP4", expanded=True):
+                    st.write("Protegiendo el Atom Header del MP4 mediante adición de paridad:")
+                    st.dataframe(pd.DataFrame(fec_logs))
+                
+                meta = {"body_b64": base64.b64encode(body_bytes).decode('utf-8'), "original_len": len(tx_bits)}
+                payload = {"modulo": "video", "metadata": meta, "fec_rate": fec_vid, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_vid)}
+                st.markdown(create_download_link(payload, "video.bin"), unsafe_allow_html=True)
 
     with col_rx_vid:
         st.markdown("### 📥 Recepción H.264")
         rx_file_vid = st.file_uploader("Sube .bin", type=["bin", "json"], key="rx_vid")
         if rx_file_vid:
             data = json.load(rx_file_vid)
-            source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
             
-            if err: st.warning(f"Capa de Transporte: {len(err)} errores corregidos en la cabecera crítica.")
+            with st.expander("🛠️ Destrucción de Errores de Cabecera"):
+                source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
+                if err:
+                    st.warning(f"¡Atención! {len(err)} errores atacaron la cabecera MP4.")
+                    st.dataframe(pd.DataFrame(err[:5]))
             
             source_bits = source_bits[:data["metadata"]["original_len"]]
             try:
@@ -370,8 +397,8 @@ with tab_vid:
                 body_rx = base64.b64decode(data["metadata"]["body_b64"])
                 full_video = header_rx + body_rx
                 
-                st.success("Reconstrucción Exitosa: Cabecera NAL intacta.")
+                st.success("Reconstrucción Exitosa: Cabecera NAL restaurada, reproduciendo.")
+                st.markdown("#### Video Recibido (Destino)")
                 st.video(full_video)
             except Exception:
                 st.error("Video Corrupto: El reproductor HTML5 no puede leer el archivo. El ruido destruyó los átomos MP4.")
-                
