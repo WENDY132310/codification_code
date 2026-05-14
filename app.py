@@ -46,7 +46,6 @@ def render_matrix_grid(matrix):
     return html
 
 def render_error_map(original, received, max_bits=500):
-    """Renderiza visualmente los bits recibidos, pintando de rojo los alterados"""
     html = "<div style='font-family:monospace; font-size:14px; background:#111827; padding:10px; border:1px solid #374151; border-radius:8px; word-break:break-all; max-height:200px; overflow-y:auto;'>"
     for o, r in zip(original[:max_bits], received[:max_bits]):
         if o == r: html += f"<span style='color:#00ffff;'>{r}</span>"
@@ -112,25 +111,57 @@ class HuffmanCoder:
         for b in encoded:
             curr += b
             if curr in inverse:
-                if len(logs) < max_logs: logs.append({"Buffer Rx": curr, "Puerta NOT/Match": "✅", "Símbolo": inverse[curr]})
+                if len(logs) < max_logs: logs.append({"Buffer Rx": curr, "Match": "✅", "Símbolo": inverse[curr]})
                 out += inverse[curr]; curr = ''
         return out, logs
 
+# NUEVA CLASE FEC DINÁMICA (Soporta k/n configurable)
 class FEC_ChannelCoder:
-    def __init__(self, rate_str): self.rate_str = rate_str
+    def __init__(self, rate_str): 
+        self.rate_str = rate_str
+        self.k, self.n = map(int, rate_str.split('/'))
+        self.p = self.n - self.k  # Cantidad de bits de paridad a añadir
+
     def encode(self, bits):
         if not bits: return ""
-        return bits + ''.join('1' if bits[i:i+3].count('1')%2 else '0' for i in range(0, len(bits), 3))
+        encoded = ""
+        # Particionamos en bloques de tamaño 'k'
+        for i in range(0, len(bits), self.k):
+            block = bits[i:i+self.k]
+            # Zero-padding si el último bloque está incompleto
+            if len(block) < self.k:
+                block = block.ljust(self.k, '0')
+            
+            # Cálculo matemático de la paridad (XOR simulado)
+            ones_count = block.count('1')
+            parity = ""
+            for j in range(self.p):
+                parity += str((ones_count + j) % 2) # Alternamos paridad par/impar para múltiples bits
+            
+            encoded += block + parity
+        return encoded
         
     def decode_syndrome(self, original_fec, received_bits):
         errors, corrected = [], list(received_bits)
+        
+        # 1. Detección y Corrección Física
         for i in range(min(len(original_fec), len(received_bits))):
             if original_fec[i] != received_bits[i]:
-                errors.append({"Índice": i, "Esperado": original_fec[i], "Llegó": received_bits[i], "XOR": "1", "Compuerta": "NOT Aplicado"})
+                errors.append({
+                    "Índice Bit": i, 
+                    "Bloque Trama": f"Nº {i // self.n}",
+                    "Valor Corrupto": received_bits[i], 
+                    "Corrección FEC": "Invertido (NOT)"
+                })
                 corrected[i] = original_fec[i]
         
-        data_len = int(len(original_fec) * (3/4)) if self.rate_str != '1/2' else len(original_fec)//2
-        return "".join(corrected)[:data_len], errors
+        # 2. Desempaquetado (Retirar redundancia)
+        source_bits = ""
+        for i in range(0, len(corrected), self.n):
+            # De cada bloque de tamaño 'n', nos quedamos con los primeros 'k' bits útiles
+            source_bits += "".join(corrected[i:i+self.k])
+            
+        return source_bits, errors
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS Y UI PRINCIPAL
@@ -143,28 +174,33 @@ with tab_txt:
     
     with col_tx:
         st.markdown("### 📤 Módulo de Transmisión (Tx)")
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1: src_txt = st.selectbox("Codificador", ["Huffman"], key="tx_src")
         with c2: mod_txt = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="tx_mod")
-        with c3: ber_txt = st.slider("BER (Ruido Térmico)", 0.0, 1.0, 0.0, key="tx_ber")
+        
+        c3, c4 = st.columns(2)
+        # NUEVO MENÚ CON LAS TASAS SOLICITADAS
+        with c3: fec_txt = st.selectbox("Tasa FEC (k/n)", ["1/2", "1/3", "4/5", "7/8", "10/12"], key="tx_fec")
+        with c4: ber_txt = st.slider("BER AWGN", 0.0, 1.0, 0.0, key="tx_ber")
         
         text_input = st.text_area("Carga Útil (Payload):", "SYS_CORE_READY: 0x9A")
         
         if st.button("Ejecutar Pipeline Tx", type="primary"):
-            # FUENTE
             with st.expander("📦 Compresión Entrópica", expanded=True):
                 tx_bits, inverse, tree, freqs = HuffmanCoder().encode(text_input)
                 st.dataframe(pd.DataFrame(freqs.items(), columns=["Símbolo", "Frecuencia"]).T)
-                meta = {"inverse": inverse, "alg": "Huffman"}
+                # Guardamos longitud original para deshacer el Zero-Padding en Rx
+                meta = {"inverse": inverse, "alg": "Huffman", "original_len": len(tx_bits)}
             
-            # CANAL Y MODULACIÓN
-            fec_bits = FEC_ChannelCoder("2/3").encode(tx_bits)
+            fec = FEC_ChannelCoder(fec_txt)
+            fec_bits = fec.encode(tx_bits)
+            
             with st.expander("📡 Modulación y AWGN", expanded=True):
                 mod = Modulator(mod_txt)
                 st.pyplot(mod.render_constellation(mod.channel_awgn(mod.modulate(fec_bits), ber_txt)))
             
             rx_bits_simulated = inject_bit_errors(fec_bits, ber_txt)
-            st.markdown(create_download_link({"modulo": "texto", "metadata": meta, "fec_rate": "2/3", "original_fec_bits": fec_bits, "rx_bits": rx_bits_simulated}, "texto_payload.bin"), unsafe_allow_html=True)
+            st.markdown(create_download_link({"modulo": "texto", "metadata": meta, "fec_rate": fec_txt, "original_fec_bits": fec_bits, "rx_bits": rx_bits_simulated}, "texto_payload.bin"), unsafe_allow_html=True)
 
     with col_rx:
         st.markdown("### 📥 Módulo de Recepción (Rx)")
@@ -174,19 +210,19 @@ with tab_txt:
             data = json.load(rx_file)
             fec = FEC_ChannelCoder(data["fec_rate"])
             
-            with st.expander("🛠️ Bloque Físico: Filtro Síndrome (XOR)", expanded=True):
-                st.markdown("**Mapa de Calor RX (Rojo = Error detectado y corregido):**")
+            with st.expander("🛠️ Bloque Físico: Filtro Síndrome", expanded=True):
+                st.markdown("**Mapa de Calor RX (Rojo = Corrupto):**")
                 st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
                 
                 source_bits, errors = fec.decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if errors: st.dataframe(pd.DataFrame(errors[:5]), use_container_width=True) # Mostrar solo primeros errores
-            
-            with st.expander("🧩 Bloque Lógico: Decodificador Entrópico", expanded=True):
-                res, logs = HuffmanCoder().decode_visual_log(source_bits, data["metadata"]["inverse"])
-                st.markdown("**Buffer Visual (Primeros símbolos):**")
-                st.dataframe(pd.DataFrame(logs), use_container_width=True)
+                # Truncamos los ceros añadidos por el padding en la capa Tx
+                source_bits = source_bits[:data["metadata"]["original_len"]]
                 
-                st.markdown("---")
+                if errors: st.dataframe(pd.DataFrame(errors[:5]), use_container_width=True)
+            
+            with st.expander("🧩 Bloque Lógico: Decodificador", expanded=True):
+                res, logs = HuffmanCoder().decode_visual_log(source_bits, data["metadata"]["inverse"])
+                st.dataframe(pd.DataFrame(logs), use_container_width=True)
                 st.markdown(f"> **OUTPUT TERMINAL:**\n> `{res}`")
 
 # ================= IMAGEN =================
@@ -196,7 +232,10 @@ with tab_img:
     with col_tx_img:
         st.markdown("### 📤 Módulo Transmisor de Imagen")
         img_file = st.file_uploader("Subir Matriz/Imagen", type=["png", "jpg"])
-        ber_img = st.slider("BER AWGN (Imagen)", 0.0, 1.0, 0.0)
+        
+        c_img1, c_img2 = st.columns(2)
+        with c_img1: fec_img = st.selectbox("Tasa FEC", ["1/2", "1/3", "4/5", "7/8", "10/12"], key="tx_img_fec")
+        with c_img2: ber_img = st.slider("BER AWGN", 0.0, 1.0, 0.0, key="tx_img_ber")
         
         if st.button("Ejecutar Pipeline DCT", type="primary") and img_file:
             img_arr = np.array(Image.open(img_file).convert("L"))
@@ -206,13 +245,14 @@ with tab_img:
                 dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
                 quant = np.round(dct_block / 10)
                 c1, c2 = st.columns(2)
-                c1.markdown("**Origen Espacial**"); c1.markdown(render_matrix_grid(block), unsafe_allow_html=True)
-                c2.markdown("**Tx Frecuencial**"); c2.markdown(render_matrix_grid(quant), unsafe_allow_html=True)
+                c1.markdown("**Espacial**"); c1.markdown(render_matrix_grid(block), unsafe_allow_html=True)
+                c2.markdown("**Frecuencial**"); c2.markdown(render_matrix_grid(quant), unsafe_allow_html=True)
             
             tx_bits = ''.join(format(int(abs(x)), '08b') for x in quant.flatten())
-            fec_bits = FEC_ChannelCoder("2/3").encode(tx_bits)
+            fec = FEC_ChannelCoder(fec_img)
+            fec_bits = fec.encode(tx_bits)
             
-            payload = {"modulo": "imagen", "metadata": {"signs": np.sign(quant).flatten().tolist()}, "fec_rate": "2/3", "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_img)}
+            payload = {"modulo": "imagen", "metadata": {"signs": np.sign(quant).flatten().tolist(), "original_len": len(tx_bits)}, "fec_rate": fec_img, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_img)}
             st.markdown(create_download_link(payload, "imagen_payload.bin"), unsafe_allow_html=True)
 
     with col_rx_img:
@@ -221,10 +261,12 @@ with tab_img:
         
         if rx_file_img is not None:
             data = json.load(rx_file_img)
+            fec = FEC_ChannelCoder(data["fec_rate"])
             
             with st.expander("🛠️ Bloque Físico FEC", expanded=True):
                 st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
-                source_bits, _ = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
+                source_bits, _ = fec.decode_syndrome(data["original_fec_bits"], data["rx_bits"])
+                source_bits = source_bits[:data["metadata"]["original_len"]]
             
             with st.expander("🧩 Pipeline Inverso (IDCT)", expanded=True):
                 try:
@@ -233,7 +275,7 @@ with tab_img:
                     idct_block = idct(idct((quant_rx * 10).T, norm='ortho').T, norm='ortho')
                     
                     c1, c2 = st.columns(2)
-                    c1.markdown("**1. Matriz Restaurada**"); c1.markdown(render_matrix_grid(quant_rx), unsafe_allow_html=True)
-                    c2.markdown("**2. Output Espacial (IDCT)**"); c2.markdown(render_matrix_grid(np.round(idct_block)), unsafe_allow_html=True)
-                except Exception as e: 
-                    st.error("Error de Segmentación: Daño Severo en Capa de Transporte.")
+                    c1.markdown("**1. Restaurada**"); c1.markdown(render_matrix_grid(quant_rx), unsafe_allow_html=True)
+                    c2.markdown("**2. IDCT Final**"); c2.markdown(render_matrix_grid(np.round(idct_block)), unsafe_allow_html=True)
+                except Exception: 
+                    st.error("Daño Severo. Falló reconstrucción espacial.")
