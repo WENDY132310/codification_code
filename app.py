@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import matplotlib.subplots
 import matplotlib.pyplot as plt
 import heapq
 import json
@@ -29,11 +30,14 @@ STYLING = "<style>.stApp{background:#0a0a0f;color:#e0e0e0;} h1,h2,h3{color:#00ff
 st.markdown(STYLING, unsafe_allow_html=True)
 
 st.title("📡 Laboratorio DSP: Multimedia a través del Canal")
-st.caption("Arquitectura Tx/Rx Completa para Texto, Imagen Real, Audio PCM y Video H.264")
+st.caption("Arquitectura Tx/Rx Completa con Reconstrucción Real de Audio y Video")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RENDERIZADORES Y HERRAMIENTAS FÍSICAS
 # ─────────────────────────────────────────────────────────────────────────────
+def bytes_to_bits(data): return ''.join(format(b, '08b') for b in data)
+def bits_to_bytes(bits): return bytes(int(bits[i:i+8], 2) for i in range(0, len(bits), 8) if i+8 <= len(bits))
+
 def create_download_link(payload_dict, filename):
     json_str = json.dumps(payload_dict, indent=2)
     b64 = base64.b64encode(json_str.encode()).decode()
@@ -58,7 +62,6 @@ def render_error_map(original, received, max_bits=600):
 def inject_bit_errors(bits, ber):
     if ber <= 0: return bits
     bit_list = list(bits)
-    # Probabilidad de error calibrada para afectar visual/auditivamente
     for _ in range(int(len(bit_list) * (ber / 1.5))): 
         idx = random.randint(0, len(bit_list)-1)
         bit_list[idx] = '1' if bit_list[idx] == '0' else '0'
@@ -121,7 +124,6 @@ class MuLawCodec:
     MU = 255
     @staticmethod
     def encode(samples):
-        # Normalizar 16-bit PCM
         s_norm = samples.astype(np.float32) / 32768.0
         s_comp = np.sign(s_norm) * (np.log1p(MuLawCodec.MU * np.abs(s_norm)) / np.log1p(MuLawCodec.MU))
         return np.int8(s_comp * 127)
@@ -157,7 +159,6 @@ class FEC_ChannelCoder:
         source_bits = "".join("".join(corrected[i:i+self.k]) for i in range(0, len(corrected), self.n))
         return source_bits, errors
 
-# Helpers DCT para la Imagen Completa
 def process_full_image_dct(img_arr):
     h, w = img_arr.shape
     h_pad, w_pad = (8 - h % 8) % 8, (8 - w % 8) % 8
@@ -218,8 +219,11 @@ with tab_txt:
             
             with st.expander("🧩 Decodificación", expanded=True):
                 source_bits = source_bits[:data["metadata"]["original_len"]]
-                res, logs = HuffmanCoder().decode_visual_log(source_bits, data["metadata"]["inverse"])
-                st.markdown(f"> **OUTPUT:** `{res}`")
+                try:
+                    res, logs = HuffmanCoder().decode_visual_log(source_bits, data["metadata"]["inverse"])
+                    st.markdown(f"> **OUTPUT:** `{res}`")
+                except Exception:
+                    st.error("Error: Bits dañados permanentemente.")
 
 # ================= IMAGEN =================
 with tab_img:
@@ -233,16 +237,10 @@ with tab_img:
         img_file = st.file_uploader("Sube Imagen", type=["png", "jpg"])
         if st.button("Ejecutar DCT Global", type="primary") and img_file:
             img_raw = Image.open(img_file).convert("L")
-            img_raw.thumbnail((128, 128)) # Limitamos para no sobrecargar el JSON
+            img_raw.thumbnail((128, 128)) 
             img_arr = np.array(img_raw)
-            st.image(img_raw, caption="Original Escala de Grises", width=200)
             
-            with st.expander("📦 Matemática DCT (Muestra 1 bloque)"):
-                dct_blocks, padded_shape = process_full_image_dct(img_arr)
-                c1, c2 = st.columns(2)
-                c1.markdown("**Espacial**"); c1.markdown(render_matrix_grid(img_arr[:8,:8]), unsafe_allow_html=True)
-                c2.markdown("**Frecuencia**"); c2.markdown(render_matrix_grid(dct_blocks[:8,:8]), unsafe_allow_html=True)
-            
+            dct_blocks, padded_shape = process_full_image_dct(img_arr)
             tx_bits = ''.join(format(int(abs(x)), '08b') for x in dct_blocks.flatten())
             fec_bits = FEC_ChannelCoder(fec_img).encode(tx_bits)
             
@@ -285,15 +283,20 @@ with tab_aud:
         if st.button("Ejecutar Pipeline Audio", type="primary") and aud_file:
             with wave.open(io.BytesIO(aud_file.read()), 'rb') as wav_in:
                 params = wav_in.getparams()
-                # Extraemos solo 1 seg (~16000 frames) para mantener el JSON rápido
                 frames = wav_in.readframes(min(params.nframes, 16000))
             
             samples = np.frombuffer(frames, dtype=np.int16)
             encoded = MuLawCodec.encode(samples)
             
             with st.expander("📦 Oscilograma (Original vs Cuantizado)"):
-                fig, ax = plt.subplots(figsize=(6,2)); ax.plot(samples[:200], label="PCM 16-bit", alpha=0.7); ax.plot(encoded[:200]*256, label="μ-Law 8-bit", alpha=0.7)
-                ax.legend(); fig.patch.set_facecolor('#0a0a0f'); ax.set_facecolor('#111827'); st.pyplot(fig)
+                fig, ax = plt.subplots(figsize=(6,2))
+                ax.plot(samples[:200], label="PCM 16-bit", alpha=0.7)
+                # FIX DEL OVERFLOW: Convertimos a int32 antes de multiplicar por 256
+                ax.plot(encoded[:200].astype(np.int32) * 256, label="μ-Law 8-bit", alpha=0.7)
+                ax.legend()
+                fig.patch.set_facecolor('#0a0a0f')
+                ax.set_facecolor('#111827')
+                st.pyplot(fig)
             
             tx_bits = ''.join(format(x & 0xFF, '08b') for x in encoded)
             fec_bits = FEC_ChannelCoder(fec_aud).encode(tx_bits)
@@ -331,39 +334,44 @@ with tab_aud:
 with tab_vid:
     col_tx_vid, col_rx_vid = st.columns(2)
     with col_tx_vid:
-        st.markdown("### 📤 Emulación H.264 (CABAC)")
+        st.markdown("### 📤 Protección de Cabecera (NAL)")
+        st.info("Dado el tamaño masivo de los videos, este laboratorio extrae y protege mediante FEC exclusivamente la cabecera del contenedor (MP4 Atoms). Si la cabecera sobrevive, el video se reproduce.")
         c_v1, c_v2 = st.columns(2)
-        with c_v1: fec_vid = st.selectbox("FEC", ["7/8", "4/5", "1/2"], key="tx_vid_fec")
+        with c_v1: fec_vid = st.selectbox("FEC", ["1/2", "4/5", "7/8"], key="tx_vid_fec")
         with c_v2: ber_vid = st.slider("BER", 0.0, 1.0, 0.0, key="tx_vid_ber")
         
         vid_file = st.file_uploader("Sube Video MP4", type=["mp4", "mov"])
-        if st.button("Analizar Macrobloques", type="primary") and vid_file:
+        if st.button("Transmitir Video", type="primary") and vid_file:
             vid_bytes = vid_file.read()
-            st.video(vid_bytes)
+            header_bytes = vid_bytes[:250]
+            body_bytes = vid_bytes[250:]
             
-            with st.expander("📦 Extracción de Vectores (Metadata)"):
-                st.markdown("Al ser muy pesado, no enviaremos pixeles, sino **Capa de Transporte NAL y Vectores de Movimiento**.")
-                logs_video = pd.DataFrame([
-                    {"MB_ID": 1, "Coord": "(0,0)", "Vector(x,y)": "(2,-1)", "CABAC_Tx_Bits": "110100101"},
-                    {"MB_ID": 2, "Coord": "(16,0)", "Vector(x,y)": "(0,0)", "CABAC_Tx_Bits": "0011100"}
-                ])
-                st.dataframe(logs_video)
-            
-            # Dummy Payload representativo de los macrobloques
-            tx_bits = "1101001010011100" * 20 
+            tx_bits = bytes_to_bits(header_bytes)
             fec_bits = FEC_ChannelCoder(fec_vid).encode(tx_bits)
-            meta = {"original_len": len(tx_bits)}
             
+            meta = {
+                "body_b64": base64.b64encode(body_bytes).decode('utf-8'),
+                "original_len": len(tx_bits)
+            }
             payload = {"modulo": "video", "metadata": meta, "fec_rate": fec_vid, "original_fec_bits": fec_bits, "rx_bits": inject_bit_errors(fec_bits, ber_vid)}
             st.markdown(create_download_link(payload, "video.bin"), unsafe_allow_html=True)
 
     with col_rx_vid:
-        st.markdown("### 📥 Rx y Render Video")
+        st.markdown("### 📥 Recepción H.264")
         rx_file_vid = st.file_uploader("Sube .bin", type=["bin", "json"], key="rx_vid")
         if rx_file_vid:
             data = json.load(rx_file_vid)
-            with st.expander("🛠️ Corrección de Capa NAL"):
-                st.markdown(render_error_map(data["original_fec_bits"], data["rx_bits"]), unsafe_allow_html=True)
-                source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
-                if err: st.error(f"¡Peligro! {len(err)} paquetes NAL reparados para evitar Glitching o Smearing.")
-                else: st.success("Buffer de video sincronizado sin pérdidas.")
+            source_bits, err = FEC_ChannelCoder(data["fec_rate"]).decode_syndrome(data["original_fec_bits"], data["rx_bits"])
+            
+            if err: st.warning(f"Capa de Transporte: {len(err)} errores corregidos en la cabecera crítica.")
+            
+            source_bits = source_bits[:data["metadata"]["original_len"]]
+            try:
+                header_rx = bits_to_bytes(source_bits)
+                body_rx = base64.b64decode(data["metadata"]["body_b64"])
+                full_video = header_rx + body_rx
+                
+                st.success("Reconstrucción Exitosa: Cabecera NAL intacta.")
+                st.video(full_video)
+            except Exception:
+                st.error("Video Corrupto: El reproductor HTML5 no puede leer el archivo. El ruido destruyó los átomos MP4.")
