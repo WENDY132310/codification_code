@@ -1167,19 +1167,89 @@ def render_no_file(icon: str, texto: str, subtexto: str) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 #  CANAL LAB: TAB RENDERERS
 # ═════════════════════════════════════════════════════════════════════════════
-def _render_fec_metricas(fv: dict) -> None:
-    """Muestra métricas de canal FEC en columnas."""
+def _render_fec_metricas(fv: dict, tasa_sel: str = "Automática (2D)") -> None:
+    """Muestra métricas de canal FEC en columnas, incluyendo tabla de tasas de codificación."""
     section_label("📊", "MÉTRICAS DE CANAL FEC")
+
+    # ── Tabla de tasas estándar ───────────────────────────────────────────────
+    TASAS = {
+        "1/2": {"k_n": "1/2", "R": 0.500, "overhead": 100.0, "robustez": "⭐⭐⭐⭐⭐ Máxima",
+                "uso": "Voz / IoT ruidoso", "dmin": 3, "bits_parity_pct": "50%"},
+        "2/3": {"k_n": "2/3", "R": 0.667, "overhead": 50.0,  "robustez": "⭐⭐⭐⭐ Alta",
+                "uso": "DVB-T / OFDM",     "dmin": 4, "bits_parity_pct": "33%"},
+        "4/5": {"k_n": "4/5", "R": 0.800, "overhead": 25.0,  "robustez": "⭐⭐⭐ Media",
+                "uso": "Wi-Fi / LTE",       "dmin": 2, "bits_parity_pct": "20%"},
+        "7/8": {"k_n": "7/8", "R": 0.875, "overhead": 14.3,  "robustez": "⭐⭐ Baja",
+                "uso": "Satélite / alta SNR","dmin": 2, "bits_parity_pct": "12.5%"},
+        "Automática (2D)": {
+            "k_n": f"{fv['n_data_bits']}/{fv['n_total_bits']}",
+            "R": fv['code_rate'],
+            "overhead": fv['overhead_pct'],
+            "robustez": "⭐⭐⭐ FEC Matricial 2D",
+            "uso": "Laboratorio / Educativo",
+            "dmin": 3,
+            "bits_parity_pct": f"{fv['overhead_pct']:.1f}%",
+        },
+    }
+
+    # Highlight de la tasa seleccionada
+    tasa_info = TASAS.get(tasa_sel, TASAS["Automática (2D)"])
+
+    M = "#0d1424"
+    tabla_html = (
+        "<div style='font-family:\"IBM Plex Mono\",monospace;font-size:0.72rem;"
+        "background:var(--bg-1);padding:1rem;border-radius:8px;border:1px solid var(--border);margin:8px 0;'>"
+        "<div style='color:var(--cyan);font-weight:700;margin-bottom:0.6rem;'>"
+        "TASAS DE CODIFICACIÓN FEC — COMPARATIVA</div>"
+        "<table style='border-collapse:collapse;width:100%;'>"
+        "<tr style='color:var(--muted);font-size:0.65rem;border-bottom:1px solid var(--border);'>"
+        "<th style='padding:5px 8px;text-align:left;'>Tasa</th>"
+        "<th>R (k/n)</th><th>Overhead</th><th>Paridad</th>"
+        "<th>Robustez</th><th>Uso Típico</th></tr>"
+    )
+    for nombre, t in TASAS.items():
+        if nombre == "Automática (2D)": continue
+        activo = nombre == tasa_sel
+        bg = "rgba(6,182,212,0.12)" if activo else M
+        borde = "border:1px solid var(--cyan);" if activo else "border:1px solid #1e293b;"
+        marcador = " ◀ ACTIVA" if activo else ""
+        tabla_html += (
+            f"<tr style='background:{bg};{borde}'>"
+            f"<td style='padding:5px 8px;color:{'var(--cyan)' if activo else 'var(--txt)'};font-weight:{'bold' if activo else 'normal'};'>"
+            f"{nombre}{marcador}</td>"
+            f"<td style='text-align:center;color:#06b6d4;'>{t['R']:.3f}</td>"
+            f"<td style='text-align:center;color:#f59e0b;'>{t['overhead']:.1f}%</td>"
+            f"<td style='text-align:center;color:#8b5cf6;'>{t['bits_parity_pct']}</td>"
+            f"<td style='text-align:center;'>{t['robustez']}</td>"
+            f"<td style='text-align:center;color:var(--muted);'>{t['uso']}</td></tr>"
+        )
+    # Fila de la tasa actual del laboratorio
+    t = TASAS["Automática (2D)"]
+    activo = tasa_sel == "Automática (2D)"
+    bg = "rgba(139,92,246,0.12)" if activo else M
+    tabla_html += (
+        f"<tr style='background:{bg};border:1px solid {'var(--violet)' if activo else '#1e293b'};'>"
+        f"<td style='padding:5px 8px;color:var(--violet);font-weight:bold;'>Lab 2D{' ◀ ACTIVA' if activo else ''}</td>"
+        f"<td style='text-align:center;color:#06b6d4;'>{t['R']:.3f}</td>"
+        f"<td style='text-align:center;color:#f59e0b;'>{t['overhead']:.1f}%</td>"
+        f"<td style='text-align:center;color:#8b5cf6;'>{t['bits_parity_pct']}</td>"
+        f"<td style='text-align:center;'>{t['robustez']}</td>"
+        f"<td style='text-align:center;color:var(--muted);'>{t['uso']}</td></tr>"
+    )
+    tabla_html += "</table></div>"
+    st.markdown(tabla_html, unsafe_allow_html=True)
+
+    # ── Métricas de la tasa activa ────────────────────────────────────────────
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: st.metric("Tasa de Código R", f"{fv['code_rate']:.3f}", f"k/n")
-    with c2: st.metric("Overhead FEC", f"{fv['overhead_pct']:.1f}%", f"{fv['n_parity_bits']} bits paridad")
+    with c1: st.metric("Tasa R activa", tasa_info["k_n"], f"R = {tasa_info['R']:.3f}")
+    with c2: st.metric("Overhead FEC", f"{tasa_info['overhead']:.1f}%", f"{fv['n_parity_bits']} bits paridad")
     with c3: st.metric("BER Canal", f"{fv['ber_real']:.4f}", "bits erróneos / total")
     with c4: st.metric("SNR Estimado", f"{fv['snr_db']:.1f} dB", "")
     with c5: st.metric("Bits Corregidos", str(fv['bits_corregidos']), "por FEC 2D")
     c6, c7, c8 = st.columns(3)
-    with c6: st.metric("Bits de Datos", str(fv['n_data_bits']), "")
+    with c6: st.metric("Bits de Datos k", str(fv['n_data_bits']), "")
     with c7: st.metric("Bits de Paridad", str(fv['n_parity_bits']), "")
-    with c8: st.metric("Bits Totales Tx", str(fv['n_total_bits']), "")
+    with c8: st.metric("Bits Totales n", str(fv['n_total_bits']), "")
 
 
 def _render_fec_paso_a_paso(fv: dict) -> None:
@@ -1237,22 +1307,356 @@ def _render_fec_paso_a_paso(fv: dict) -> None:
             st.markdown(html, unsafe_allow_html=True)
 
 
+def _render_decode_steps_texto(source_bits: str, inverse: Dict, cols: int, padding: int,
+                               rx_bits_orig: str, rx_bits_noisy: str, tasa_sel: str) -> None:
+    """Proceso completo de decodificación para TEXTO con pasos explicados."""
+    section_label("🔓", "PROCESO DE DECODIFICACIÓN — TEXTO")
+    info_box("🧠",
+             "La decodificación invierte el pipeline completo: "
+             "<strong>FEC Decode → Extracción bits limpios → Huffman Decode → Texto original</strong>. "
+             "Cada paso es reversible y matemáticamente verificable.", "green")
+
+    TASA_PARAMS = {"1/2": 0.5, "2/3": 0.667, "4/5": 0.8, "7/8": 0.875, "Automática (2D)": None}
+    r_val = TASA_PARAMS.get(tasa_sel, None)
+
+    decode_steps = [
+        ("📥 DEC — PASO 1: Recepción del Stream FEC",
+         f"Se recibe el stream de bits del canal. Longitud total: <strong>{len(rx_bits_noisy)} bits</strong>. "
+         f"Tasa de código seleccionada: <strong>{tasa_sel}</strong> "
+         f"(R ≈ {r_val if r_val else round(len(source_bits)/max(len(rx_bits_noisy),1), 3)}). "
+         f"El receptor conoce la estructura de la matriz FEC (columnas = {cols}).",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:var(--cyan);'>"
+         f"Stream Rx (primeros 64 bits): {rx_bits_noisy[:64]}{'...' if len(rx_bits_noisy)>64 else ''}</div>"),
+
+        ("🛡️ DEC — PASO 2: Verificación FEC 2D (Síndromes)",
+         "El receptor reconstruye la matriz y calcula el XOR de cada fila y columna. "
+         "Si síndrome_fila[i] = 1 y síndrome_col[j] = 1, el bit [i,j] es erróneo y se invierte. "
+         f"Bits recibidos: {len(rx_bits_noisy)} | Bits tras FEC decode: <strong>{len(source_bits)}</strong>.",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:#10b981;'>"
+         f"Bits recuperados (primeros 64): {source_bits[:64]}{'...' if len(source_bits)>64 else ''}</div>"),
+
+        ("📖 DEC — PASO 3: Decodificación Huffman",
+         "Con el diccionario inverso (recibido en metadata), se recorre el stream bit a bit. "
+         "Cuando el prefijo acumulado coincide con un código válido, se emite el símbolo. "
+         "Complejidad: O(n·L̄) donde n = bits y L̄ = longitud promedio de código.",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;'>"
+         f"<span style='color:var(--muted);'>Códigos inversos disponibles: </span>"
+         f"<span style='color:#f59e0b;'>{len(inverse)} símbolos</span></div>"),
+
+        ("✅ DEC — PASO 4: Reconstrucción del Texto Original",
+         "Los símbolos Huffman decodificados se concatenan para reconstruir el mensaje original. "
+         "La comparación bit a bit entre el mensaje original y el reconstruido "
+         "permite calcular el BER residual post-corrección FEC.",
+         ""),
+    ]
+
+    try:
+        res_txt, logs = HuffmanCoderCanal().decode_visual_log(source_bits, inverse, max_logs=20)
+    except Exception as e:
+        res_txt, logs = f"[ERROR: {e}]", []
+
+    # Inyectar resultado en paso 4
+    decode_steps[3] = (decode_steps[3][0], decode_steps[3][1],
+        f"<div style='font-family:\"IBM Plex Mono\",monospace;background:rgba(16,185,129,0.08);"
+        f"padding:12px 16px;border-radius:8px;border:1px solid #10b981;'>"
+        f"<div style='color:#10b981;font-weight:700;margin-bottom:4px;'>TEXTO RECONSTRUIDO:</div>"
+        f"<div style='color:var(--txt);font-size:0.9rem;'>{res_txt}</div></div>")
+
+    for titulo, detalle, html_extra in decode_steps:
+        with st.expander(titulo, expanded=True):
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:var(--txt-dim);margin-bottom:8px;line-height:1.6;'>"
+                f"{detalle}</div>", unsafe_allow_html=True)
+            if html_extra:
+                st.markdown(html_extra, unsafe_allow_html=True)
+
+    # Logs de decodificación Huffman
+    if logs:
+        with st.expander("📋 Log de Decodificación Huffman (primeros 20 símbolos)", expanded=False):
+            st.dataframe(pd.DataFrame(logs), use_container_width=True)
+
+    # Métricas post-decodificación
+    bits_err_post = sum(1 for a, b in zip(rx_bits_orig[:len(source_bits)], source_bits) if a != b)
+    ber_post = bits_err_post / max(len(source_bits), 1)
+    section_label("📊", "MÉTRICAS POST-DECODIFICACIÓN")
+    cd1, cd2, cd3, cd4 = st.columns(4)
+    with cd1: st.metric("Bits Recuperados", str(len(source_bits)), "")
+    with cd2: st.metric("Símbolos Huffman", str(len(res_txt)), "")
+    with cd3: st.metric("BER Post-FEC", f"{ber_post:.6f}", "residual")
+    with cd4: st.metric("Bits Erróneos Restantes", str(bits_err_post), "")
+
+    # Descargas decodificación
+    section_label("⬇️", "DESCARGAS — DECODIFICACIÓN")
+    st.markdown(
+        create_bytes_download_link(res_txt.encode(), "texto_decodificado.txt",
+                                   "⬇ Descargar Texto Decodificado"),
+        unsafe_allow_html=True)
+    st.markdown(
+        create_bytes_download_link(source_bits.encode(), "bits_post_fec.txt",
+                                   "⬇ Descargar Bits Post-FEC (limpios)"),
+        unsafe_allow_html=True)
+    if logs:
+        log_json = json.dumps(logs, indent=2, ensure_ascii=False)
+        st.markdown(
+            create_bytes_download_link(log_json.encode(), "log_huffman_decode.json",
+                                       "⬇ Descargar Log Huffman Decode"),
+            unsafe_allow_html=True)
+
+
+def _render_decode_steps_imagen(source_bits: str, metadata: dict) -> None:
+    """Proceso completo de decodificación para IMAGEN con pasos explicados."""
+    section_label("🔓", "PROCESO DE DECODIFICACIÓN — IMAGEN")
+    info_box("🧠",
+             "Pipeline de reconstrucción: "
+             "<strong>FEC Decode → Bits → Coeficientes DCT × Signos → IDCT → Imagen reconstruida</strong>. "
+             "La IDCT invierte la transformada coseno y recupera los valores de pixel.", "green")
+
+    decode_steps_img = [
+        ("📥 DEC IMG — PASO 1: Stream FEC Decodificado",
+         f"Se reciben <strong>{len(source_bits)} bits</strong> tras corrección FEC. "
+         f"Cada grupo de 8 bits representa la magnitud de un coeficiente DCT cuantizado.",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:var(--cyan);'>"
+         f"Primeros 64 bits: {source_bits[:64]}{'...' if len(source_bits)>64 else ''}</div>"),
+
+        ("🔢 DEC IMG — PASO 2: Reconstrucción de Coeficientes DCT",
+         f"Los bits se agrupan en palabras de 8 bits (enteros 0-255). "
+         f"Se multiplican por el vector de signos original almacenado en metadata "
+         f"para restaurar los coeficientes DCT con su signo correcto. "
+         f"Dimensión de la imagen reconstruida: "
+         f"<strong>{metadata.get('orig_h','?')} × {metadata.get('orig_w','?')} px</strong>.",
+         ""),
+
+        ("🔄 DEC IMG — PASO 3: IDCT 2D por Bloques 8×8",
+         "Se aplica la <strong>Transformada Discreta del Coseno Inversa</strong> (IDCT-II) en cada bloque 8×8. "
+         "Fórmula: f(x,y) = (2/N)·ΣΣ Cu·Cv·F(u,v)·cos(...)·cos(...). "
+         "Los valores se recortan al rango [0, 255] y se convierten a uint8.",
+         "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         "border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:#8b5cf6;'>"
+         "IDCT: F⁻¹(u,v) → f(x,y) | Recorte: clip(f, 0, 255) → uint8</div>"),
+
+        ("🖼️ DEC IMG — PASO 4: Imagen Reconstruida",
+         "La matriz uint8 se convierte a imagen PIL. La calidad depende del factor de cuantización DCT. "
+         "A mayor cuantización → menor fidelidad pero mayor compresión.", ""),
+    ]
+
+    try:
+        vals = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
+        pad_h, pad_w = metadata["pad_h"], metadata["pad_w"]
+        vals = vals[:pad_h * pad_w]
+        quant_rx = (np.array(vals) * np.array(metadata["signs"])).reshape((pad_h, pad_w))
+        rec_arr = reconstruct_full_image_idct(quant_rx, metadata["orig_h"], metadata["orig_w"])
+        rec_pil = PILImage.fromarray(rec_arr)
+        recon_ok = True
+    except Exception as e:
+        recon_ok = False
+        decode_steps_img[3] = (decode_steps_img[3][0], f"Error en reconstrucción: {e}", "")
+
+    if recon_ok:
+        decode_steps_img[3] = (decode_steps_img[3][0], decode_steps_img[3][1],
+            "<div style='color:#10b981;font-family:\"IBM Plex Mono\",monospace;font-size:0.75rem;'>"
+            "✅ Imagen reconstruida correctamente — ver visualización abajo.</div>")
+
+    for titulo, detalle, html_extra in decode_steps_img:
+        with st.expander(titulo, expanded=True):
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:var(--txt-dim);margin-bottom:8px;line-height:1.6;'>"
+                f"{detalle}</div>", unsafe_allow_html=True)
+            if html_extra:
+                st.markdown(html_extra, unsafe_allow_html=True)
+
+    if recon_ok:
+        st.image(rec_pil, caption="Imagen Reconstruida (IDCT)", use_container_width=True)
+        buf_img = io.BytesIO()
+        rec_pil.save(buf_img, format="PNG")
+        section_label("⬇️", "DESCARGAS — DECODIFICACIÓN IMAGEN")
+        st.markdown(
+            create_bytes_download_link(buf_img.getvalue(), "imagen_decodificada.png",
+                                       "⬇ Descargar Imagen Decodificada PNG"),
+            unsafe_allow_html=True)
+        st.markdown(
+            create_bytes_download_link(source_bits.encode(), "dct_bits_post_fec.txt",
+                                       "⬇ Descargar Bits DCT post-FEC"),
+            unsafe_allow_html=True)
+
+
+def _render_decode_steps_audio(source_bits: str, metadata: dict) -> None:
+    """Proceso completo de decodificación para AUDIO con pasos explicados."""
+    section_label("🔓", "PROCESO DE DECODIFICACIÓN — AUDIO")
+    info_box("🧠",
+             "Pipeline de reconstrucción de audio: "
+             "<strong>FEC Decode → Bytes μ-Law → Expansión Logarítmica → PCM 16-bit → WAV</strong>. "
+             "La expansión μ-Law invierte la compresión logarítmica y recupera las amplitudes originales.", "green")
+
+    p = metadata["params"]
+    n_bytes = len(source_bits) // 8
+
+    decode_steps_aud = [
+        ("📥 DEC AUD — PASO 1: Stream FEC Decodificado",
+         f"Se recuperan <strong>{len(source_bits)} bits</strong> = <strong>{n_bytes} bytes</strong> μ-Law. "
+         f"Cada byte representa una muestra de audio comprimida logarítmicamente.",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:var(--cyan);'>"
+         f"Primeros 32 bits: {source_bits[:32]}... → {n_bytes} bytes μ-Law</div>"),
+
+        ("🔢 DEC AUD — PASO 2: Conversión Bits → Bytes μ-Law",
+         "Cada grupo de 8 bits se convierte a un byte sin signo (uint8), luego se reinterpreta "
+         "como int8 (con signo) para la expansión. Rango válido: −128 a +127.",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:#f59e0b;'>"
+         f"uint8 → int8 reinterpret_cast | {n_bytes} muestras μ-Law</div>"),
+
+        ("📈 DEC AUD — PASO 3: Expansión μ-Law (G.711 Decode)",
+         "Fórmula de expansión: <code>y = sgn(x) · (1/μ) · [(1+μ)^|x| − 1]</code><br>"
+         f"Con μ=255. Cada int8 en [−127,127] se expande a int16 en [−32767,+32767]. "
+         f"Esto invierte la compresión logarítmica aplicada en el transmisor.",
+         "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         "border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:#8b5cf6;'>"
+         "μ-Law Expand: int8 → int16 PCM | y = sign(x)·(1/255)·(256^|x/127| − 1)·32767</div>"),
+
+        ("🎵 DEC AUD — PASO 4: Reconstrucción WAV PCM",
+         f"Las muestras int16 PCM se empaquetan en un archivo WAV con los parámetros originales: "
+         f"<strong>{p.get('nchannels',1)} canal(es), "
+         f"{p.get('framerate',44100)} Hz, {p.get('sampwidth',2)*8}-bit</strong>. "
+         "El archivo resultante es reproducible directamente.", ""),
+    ]
+
+    try:
+        rx_bytes = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
+        decoded_pcm = MuLawCodec.decode(np.array(rx_bytes, dtype=np.uint8).astype(np.int8))
+        out_buffer = io.BytesIO()
+        with wave.open(out_buffer, 'wb') as wav_out:
+            wav_out.setparams((p['nchannels'], p['sampwidth'], p['framerate'],
+                               len(decoded_pcm) // p['nchannels'],
+                               p['comptype'], p['compname']))
+            wav_out.writeframes(decoded_pcm.tobytes())
+        wav_bytes = out_buffer.getvalue()
+        decode_steps_aud[3] = (decode_steps_aud[3][0], decode_steps_aud[3][1],
+            f"<div style='font-family:\"IBM Plex Mono\",monospace;background:rgba(16,185,129,0.08);"
+            f"padding:8px 12px;border-radius:6px;border:1px solid #10b981;font-size:0.7rem;color:#10b981;'>"
+            f"✅ WAV reconstruido: {len(wav_bytes):,} bytes | {len(decoded_pcm):,} muestras PCM 16-bit</div>")
+        recon_ok = True
+    except Exception as e:
+        wav_bytes = b""
+        recon_ok = False
+        decode_steps_aud[3] = (decode_steps_aud[3][0], f"Error: {e}", "")
+
+    for titulo, detalle, html_extra in decode_steps_aud:
+        with st.expander(titulo, expanded=True):
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:var(--txt-dim);margin-bottom:8px;line-height:1.6;'>"
+                f"{detalle}</div>", unsafe_allow_html=True)
+            if html_extra:
+                st.markdown(html_extra, unsafe_allow_html=True)
+
+    if recon_ok:
+        st.audio(wav_bytes)
+        section_label("⬇️", "DESCARGAS — DECODIFICACIÓN AUDIO")
+        st.markdown(
+            create_bytes_download_link(wav_bytes, "audio_decodificado.wav",
+                                       "⬇ Descargar Audio Decodificado WAV"),
+            unsafe_allow_html=True)
+        st.markdown(
+            create_bytes_download_link(source_bits.encode(), "mulaw_bits_post_fec.txt",
+                                       "⬇ Descargar Bits μ-Law post-FEC"),
+            unsafe_allow_html=True)
+
+
+def _render_decode_steps_video(source_bits: str, metadata: dict) -> None:
+    """Proceso completo de decodificación para VIDEO con pasos explicados."""
+    section_label("🔓", "PROCESO DE DECODIFICACIÓN — VIDEO")
+    info_box("🧠",
+             "Pipeline de reconstrucción de video: "
+             "<strong>FEC Decode → Bits → Bytes Cabecera → Reconstrucción NAL + Stream H.264</strong>. "
+             "La cabecera reconstruida se fusiona con el cuerpo del stream H.264 original.", "green")
+
+    decode_steps_vid = [
+        ("📥 DEC VID — PASO 1: Stream FEC Decodificado",
+         f"Se recuperan <strong>{len(source_bits)} bits</strong> correspondientes a la cabecera del contenedor MP4. "
+         "La cabecera contiene los Atoms del contenedor (ftyp, moov, mdat) que describen la estructura del video.",
+         f"<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         f"border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:var(--cyan);'>"
+         f"Bits cabecera: {source_bits[:64]}...</div>"),
+
+        ("🔢 DEC VID — PASO 2: Reconstrucción de Bytes NAL",
+         "Los bits se agrupan en palabras de 8 bits para reconstruir los bytes de la cabecera MP4. "
+         "Se recortan a múltiplo de 8 para evitar bytes parciales. "
+         "Los Atoms MP4 deben estar alineados a byte para ser válidos.",
+         "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         "border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:#f59e0b;'>"
+         "bits → bytes: bits[::8] | align to byte boundary</div>"),
+
+        ("🎬 DEC VID — PASO 3: Fusión Cabecera + Stream H.264",
+         "La cabecera reconstruida se concatena con el cuerpo del stream H.264 "
+         "(almacenado como base64 en el payload). "
+         "El resultado es un archivo MP4 válido con los Atoms correctos.",
+         "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-2);padding:8px 12px;"
+         "border-radius:6px;border:1px solid var(--border);font-size:0.7rem;color:#8b5cf6;'>"
+         "video = cabecera_rx || b64decode(body_b64)</div>"),
+
+        ("✅ DEC VID — PASO 4: Video Reproducible",
+         "Si la cabecera fue correctamente reconstruida por FEC, el video es reproducible. "
+         "Errores en la cabecera pueden corromper el contenedor aunque el stream H.264 esté intacto. "
+         "Por eso el FEC se aplica prioritariamente a la cabecera.", ""),
+    ]
+
+    try:
+        clean_bits = source_bits[:len(source_bits) - (len(source_bits) % 8)]
+        header_rx = bits_to_bytes(clean_bits)
+        body_rx = base64.b64decode(metadata["body_b64"])
+        full_video = header_rx + body_rx
+        decode_steps_vid[3] = (decode_steps_vid[3][0], decode_steps_vid[3][1],
+            f"<div style='font-family:\"IBM Plex Mono\",monospace;background:rgba(16,185,129,0.08);"
+            f"padding:8px 12px;border-radius:6px;border:1px solid #10b981;font-size:0.7rem;color:#10b981;'>"
+            f"✅ Video reconstruido: {len(full_video):,} bytes total | "
+            f"Cabecera: {len(header_rx)} bytes | Stream: {len(body_rx):,} bytes</div>")
+        recon_ok = True
+    except Exception as e:
+        full_video = b""
+        recon_ok = False
+        decode_steps_vid[3] = (decode_steps_vid[3][0], f"Error: {e}", "")
+
+    for titulo, detalle, html_extra in decode_steps_vid:
+        with st.expander(titulo, expanded=True):
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:var(--txt-dim);margin-bottom:8px;line-height:1.6;'>"
+                f"{detalle}</div>", unsafe_allow_html=True)
+            if html_extra:
+                st.markdown(html_extra, unsafe_allow_html=True)
+
+    if recon_ok:
+        st.video(full_video)
+        section_label("⬇️", "DESCARGAS — DECODIFICACIÓN VIDEO")
+        st.markdown(
+            create_bytes_download_link(full_video, "video_decodificado.mp4",
+                                       "⬇ Descargar Video Decodificado MP4"),
+            unsafe_allow_html=True)
+        st.markdown(
+            create_bytes_download_link(source_bits.encode(), "nal_bits_post_fec.txt",
+                                       "⬇ Descargar Bits NAL post-FEC"),
+            unsafe_allow_html=True)
+
+
+
 def render_canal_texto() -> None:
     col_tx, col_rx = st.columns(2)
 
     with col_tx:
         section_label("📤", "MÓDULO TRANSMISOR")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1: mod_txt = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="c_tx_mod")
         with c2: fec_cols = st.selectbox("Ancho FEC", [4, 8, 16], key="c_tx_fec")
         with c3: ber_txt = st.slider("BER AWGN", 0.0, 1.0, 0.05, key="c_tx_ber")
+        with c4: tasa_txt = st.selectbox("Tasa FEC", ["Automática (2D)", "1/2", "2/3", "4/5", "7/8"], key="c_tx_tasa")
         st.info(recommend_modulation(fec_cols))
         text_input = st.text_area("Payload:", "HOLA MUNDO", key="c_txt_payload")
 
         if st.button("▶ Ejecutar Pipeline Tx", type="primary", key="c_btn_tx_txt"):
             tx_bits, inverse, _, freq = HuffmanCoderCanal().encode(text_input)
 
-            # ── Métricas de Fuente ──
             section_label("📊", "MÉTRICAS DE FUENTE (Huffman)")
             total_sym = sum(freq.values())
             probs = {s: f / total_sym for s, f in freq.items()}
@@ -1265,10 +1669,9 @@ def render_canal_texto() -> None:
             with c3m: st.metric("Eficiencia η", f"{eta*100:.2f}%", "")
             with c4m: st.metric("Redundancia", f"{(1-eta)*100:.2f}%", "")
 
-            # ── FEC Visual completo ──
             fv = render_fec_visual_steps(tx_bits, cols=fec_cols, ber=ber_txt)
             _render_fec_paso_a_paso(fv)
-            _render_fec_metricas(fv)
+            _render_fec_metricas(fv, tasa_sel=tasa_txt)
 
             fec = MatrixFEC(cols=fec_cols)
             fec_bits, _, tx_html, padding = fec.encode(tx_bits)
@@ -1285,14 +1688,11 @@ def render_canal_texto() -> None:
                        "rx_bits": inject_bit_errors(fec_bits, ber_txt)}
 
             section_label("⬇️", "DESCARGAS")
-            # Payload canal
             st.markdown(create_download_link(payload, "texto_canal.bin"), unsafe_allow_html=True)
-            # Bits fuente codificados (Huffman)
             st.markdown(
                 create_bytes_download_link(tx_bits.encode(), "huffman_encoded.txt",
                                            "⬇ Descargar Bits Fuente Codificados (Huffman)"),
                 unsafe_allow_html=True)
-            # Señal modulada como JSON
             if len(signal) > 0:
                 sig_json = json.dumps({"scheme": mod_txt, "signal": signal.tolist()})
                 st.markdown(
@@ -1305,10 +1705,11 @@ def render_canal_texto() -> None:
         rx_file = st.file_uploader("Sube .bin", type=["bin", "json"], key="c_rx_txt")
         if rx_file:
             data = json.load(rx_file)
+            fec = MatrixFEC(cols=data["metadata"]["cols"])
+            source_bits, rx_html, syndromes, correction = fec.decode_and_correct(
+                data["rx_bits"], data["metadata"]["padding"])
+
             with st.expander("🛠️ Síndromes FEC 2D", expanded=True):
-                fec = MatrixFEC(cols=data["metadata"]["cols"])
-                source_bits, rx_html, syndromes, correction = fec.decode_and_correct(
-                    data["rx_bits"], data["metadata"]["padding"])
                 ca, cb = st.columns(2)
                 with ca:
                     st.markdown("**Matriz Rx:**")
@@ -1317,20 +1718,21 @@ def render_canal_texto() -> None:
                     st.markdown("**Log CPU:**")
                     for s in syndromes: st.write(s)
                     st.success(correction)
-            with st.expander("🧩 Decodificación Huffman", expanded=True):
-                try:
-                    res_txt, logs = HuffmanCoderCanal().decode_visual_log(
-                        source_bits, data["metadata"]["inverse"])
-                    st.markdown(f"> **OUTPUT:** `{res_txt}`")
-                    if logs: st.dataframe(pd.DataFrame(logs), use_container_width=True)
-                    # Descarga del texto recuperado
-                    section_label("⬇️", "DESCARGAS Rx")
-                    st.markdown(
-                        create_bytes_download_link(res_txt.encode(), "texto_recuperado.txt",
-                                                   "⬇ Descargar Texto Recuperado"),
-                        unsafe_allow_html=True)
-                except Exception as e:
-                    st.error(f"Error de decodificación: {e}")
+
+            tasa_rx_txt = st.selectbox(
+                "Tasa FEC (referencia Rx)",
+                ["Automática (2D)", "1/2", "2/3", "4/5", "7/8"],
+                key="c_rx_tasa_txt")
+            _render_decode_steps_texto(
+                source_bits,
+                data["metadata"]["inverse"],
+                data["metadata"]["cols"],
+                data["metadata"]["padding"],
+                data.get("original_fec_bits", source_bits),
+                data["rx_bits"],
+                tasa_rx_txt)
+
+
 
 
 def render_canal_imagen() -> None:
