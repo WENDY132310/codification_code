@@ -361,9 +361,8 @@ def create_text_download_link(text: str, filename: str, label: str = None) -> st
 def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict:
     """
     Genera HTML detallado para los 5 pasos de FEC Matricial 2D.
-    Retorna dict con html de cada paso y métricas de canal.
+    Ahora el BER sí afecta visualmente la trama Rx, los síndromes y la corrección.
     """
-    # ── Preparar datos ──
     padding_needed = (cols - (len(bits) % cols)) % cols
     padded = bits + '0' * padding_needed
     rows = len(padded) // cols
@@ -371,29 +370,49 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
     def calc_par(s: str) -> str:
         return '1' if s.count('1') % 2 != 0 else '0'
 
-    # Construir matriz de datos + paridades de fila
-    matrix: List[List[str]] = []
+    def cell(val, cls, extra=""):
+        return f'<span class="matrix-cell {cls}" style="{extra}">{val}</span>'
+
+    if rows == 0:
+        return {
+            "html_p1": "<div>Sin datos.</div>",
+            "html_p2": "<div>Sin datos.</div>",
+            "html_p3": "<div>Sin datos.</div>",
+            "html_p4": "<div>Sin datos.</div>",
+            "html_p5": "<div>Sin datos.</div>",
+            "err_r": None, "err_c": None,
+            "syn_row": -1, "syn_col": -1,
+            "code_rate": 0.0,
+            "overhead_pct": 0.0,
+            "n_data_bits": 0,
+            "n_parity_bits": 0,
+            "n_total_bits": 0,
+            "ber_real": 0.0,
+            "snr_db": 30.0,
+            "bits_corregidos": 0,
+            "encoded_stream": "",
+            "rx_stream": "",
+            "padding_needed": padding_needed,
+        }
+
+    matrix = []
     for r in range(rows):
         row = list(padded[r * cols:(r + 1) * cols])
         row_p = calc_par("".join(row))
         matrix.append(row + [row_p])
 
-    # Paridades de columna
     col_pars = []
     for c in range(cols):
         col_data = "".join(matrix[r][c] for r in range(rows))
         col_pars.append(calc_par(col_data))
     master = calc_par("".join(col_pars))
-    col_pars.append(master)
-    matrix.append(col_pars)
+    tx_col_pars = col_pars[:]
+    tx_master = master
+    matrix.append(col_pars + [master])
 
     num_data_rows = rows
+    row_len = cols + 1
 
-    cell = lambda val, cls, extra="": (
-        f'<span class="matrix-cell {cls}" style="{extra}">{val}</span>'
-    )
-
-    # ── PASO 1: Matriz Original de datos ──
     html_p1 = "<div style='margin:8px 0'>"
     for r in range(num_data_rows):
         for c in range(cols):
@@ -401,43 +420,79 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         html_p1 += "<br>"
     html_p1 += "</div>"
 
-    # ── PASO 2: Matriz con Paridades ──
     html_p2 = "<div style='margin:8px 0'>"
     for r in range(num_data_rows):
         for c in range(cols):
             html_p2 += cell(matrix[r][c], "data-bit")
         html_p2 += cell(matrix[r][cols], "parity-bit") + "<br>"
-    # fila col-paridades
     for c in range(cols):
-        html_p2 += cell(col_pars[c], "parity-bit")
-    html_p2 += cell(master, "parity-bit", "background:#9333ea;") + "<br>"
+        html_p2 += cell(tx_col_pars[c], "parity-bit")
+    html_p2 += cell(tx_master, "parity-bit", "background:#9333ea;") + "<br>"
     html_p2 += "</div>"
 
-    # ── PASO 3: Inyectar error ──
-    # Elegimos una posición de datos al azar (reproducible con la semilla)
-    rng = random.Random(42)
-    err_r = rng.randint(0, num_data_rows - 1)
-    err_c = rng.randint(0, cols - 1)
-    rx_matrix = [row[:] for row in matrix]
-    original_bit = rx_matrix[err_r][err_c]
-    rx_matrix[err_r][err_c] = '0' if original_bit == '1' else '1'
+    encoded_stream, _, _, _ = MatrixFEC(cols=cols).encode(bits)
+    rx_stream = inject_bit_errors(encoded_stream, ber)
+
+    ber_real = (
+        sum(1 for a, b in zip(encoded_stream, rx_stream) if a != b)
+        / max(len(encoded_stream), 1)
+    )
+    snr_db = -10 * math.log10(max(ber_real, 1e-9)) if ber_real > 0 else 30.0
+
+    rx_matrix = []
+    idx = 0
+    for _ in range(num_data_rows):
+        rx_matrix.append(list(rx_stream[idx:idx + row_len]))
+        idx += row_len
+
+    rx_bottom = list(rx_stream[idx:idx + cols + 1])
+    if len(rx_bottom) < cols + 1:
+        rx_bottom += ['0'] * ((cols + 1) - len(rx_bottom))
+
+    rx_col_pars = rx_bottom[:cols]
+    rx_master = rx_bottom[cols]
+
+    error_positions = []
+    idx = 0
+    for r in range(num_data_rows):
+        for c in range(cols):
+            if idx < len(encoded_stream) and idx < len(rx_stream) and encoded_stream[idx] != rx_stream[idx]:
+                error_positions.append((r, c))
+            idx += 1
+        idx += 1
+
+    err_r, err_c = error_positions[0] if error_positions else (-1, -1)
 
     html_p3 = "<div style='margin:8px 0'>"
     for r in range(num_data_rows):
         for c in range(cols):
-            if r == err_r and c == err_c:
+            if (r, c) in error_positions:
                 html_p3 += cell(rx_matrix[r][c], "error-bit")
             else:
                 html_p3 += cell(rx_matrix[r][c], "data-bit")
         html_p3 += cell(rx_matrix[r][cols], "parity-bit") + "<br>"
     for c in range(cols):
-        html_p3 += cell(col_pars[c], "parity-bit")
-    html_p3 += cell(master, "parity-bit", "background:#9333ea;") + "<br>"
+        html_p3 += cell(rx_col_pars[c], "parity-bit")
+    html_p3 += cell(rx_master, "parity-bit", "background:#9333ea;") + "<br>"
+
+    if error_positions:
+        html_p3 += (
+            f"<div style='margin-top:10px;color:#ef4444;font-size:0.8rem;'>"
+            f"Errores visibles en datos: {len(error_positions)} — "
+            f"{', '.join(f'({r},{c})' for r, c in error_positions[:12])}"
+            f"{' ...' if len(error_positions) > 12 else ''}</div>"
+        )
+    else:
+        html_p3 += (
+            "<div style='margin-top:10px;color:#10b981;font-size:0.8rem;'>"
+            "No se inyectaron errores en bits de datos para este bloque.</div>"
+        )
     html_p3 += "</div>"
 
-    # ── PASO 4: Síndrome ──
     syn_row, syn_col = -1, -1
     syndrome_details = []
+    bad_rows = []
+
     for r in range(num_data_rows):
         row_data = "".join(rx_matrix[r][:cols])
         exp_p = calc_par(row_data)
@@ -448,22 +503,26 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
             "fila": r, "esperado": exp_p, "recibido": rx_p,
             "xor": xor_val, "color": color
         })
-        if exp_p != rx_p:
-            syn_row = r
+        if xor_val:
+            bad_rows.append(r)
 
     col_syn_details = []
+    bad_cols = []
     for c in range(cols):
         col_data = "".join(rx_matrix[r][c] for r in range(num_data_rows))
         exp_p = calc_par(col_data)
-        rx_p = col_pars[c]
+        rx_p = rx_col_pars[c]
         xor_val = int(exp_p) ^ int(rx_p)
         color = "#ef4444" if xor_val else "#10b981"
         col_syn_details.append({
             "col": c, "esperado": exp_p, "recibido": rx_p,
             "xor": xor_val, "color": color
         })
-        if exp_p != rx_p:
-            syn_col = c
+        if xor_val:
+            bad_cols.append(c)
+
+    if len(bad_rows) == 1 and len(bad_cols) == 1:
+        syn_row, syn_col = bad_rows[0], bad_cols[0]
 
     M = "#1a2540"
     html_p4 = (
@@ -476,6 +535,7 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         "<th>Paridad Esperada</th><th>Paridad Recibida</th>"
         "<th>XOR (Síndrome)</th><th>Estado</th></tr>"
     )
+
     for sd in syndrome_details:
         icon = "❌ ERROR" if sd["xor"] else "✅ OK"
         html_p4 += (
@@ -486,6 +546,7 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
             f"<td style='text-align:center;color:{sd['color']};font-weight:bold;'>{sd['xor']}</td>"
             f"<td style='text-align:center;color:{sd['color']};'>{icon}</td></tr>"
         )
+
     html_p4 += (
         "</table>"
         "<div style='color:var(--cyan);margin:0.75rem 0 0.5rem;font-weight:700;'>SÍNDROMES DE COLUMNA (XOR Paridad)</div>"
@@ -495,6 +556,7 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         "<th>Paridad Esperada</th><th>Paridad Recibida</th>"
         "<th>XOR (Síndrome)</th><th>Estado</th></tr>"
     )
+
     for sd in col_syn_details:
         icon = "❌ ERROR" if sd["xor"] else "✅ OK"
         html_p4 += (
@@ -505,12 +567,22 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
             f"<td style='text-align:center;color:{sd['color']};font-weight:bold;'>{sd['xor']}</td>"
             f"<td style='text-align:center;color:{sd['color']};'>{icon}</td></tr>"
         )
+
     html_p4 += "</table>"
+
     if syn_row != -1 and syn_col != -1:
         html_p4 += (
             f"<div style='margin-top:0.75rem;background:rgba(239,68,68,0.1);border:1px solid #ef4444;"
             f"padding:8px 12px;border-radius:6px;color:#ef4444;'>"
             f"🎯 <strong>Error localizado en: Fila={syn_row}, Columna={syn_col}</strong></div>"
+        )
+    elif bad_rows or bad_cols:
+        html_p4 += (
+            f"<div style='margin-top:0.75rem;background:rgba(245,158,11,0.1);border:1px solid #f59e0b;"
+            f"padding:8px 12px;border-radius:6px;color:#f59e0b;'>"
+            f"⚠️ <strong>Se detectaron múltiples síndromes:</strong> "
+            f"filas={bad_rows if bad_rows else '[]'}, columnas={bad_cols if bad_cols else '[]'}. "
+            f"El FEC matricial 2D detecta el problema, pero esta trama no tiene una corrección única.</div>"
         )
     else:
         html_p4 += (
@@ -518,11 +590,12 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
             "padding:8px 12px;border-radius:6px;color:#10b981;'>"
             "✅ <strong>Síndrome = 0 — Trama limpia, sin errores detectados.</strong></div>"
         )
+
     html_p4 += "</div>"
 
-    # ── PASO 5: Corrección ──
     corrected_matrix = [row[:] for row in rx_matrix]
     correction_html = ""
+
     if syn_row != -1 and syn_col != -1:
         wrong_bit = corrected_matrix[syn_row][syn_col]
         fixed_bit = '0' if wrong_bit == '1' else '1'
@@ -530,54 +603,58 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         correction_html = (
             "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-1);"
             "padding:1rem;border-radius:8px;border:1px solid var(--border);margin:8px 0;'>"
-            f"<div style='color:#10b981;font-weight:700;margin-bottom:0.5rem;'>✅ BIT CORREGIDO</div>"
-            f"<div style='display:flex;align-items:center;gap:16px;flex-wrap:wrap;'>"
-            f"<div style='text-align:center;'>"
-            f"<div style='font-size:0.65rem;color:var(--muted);'>Posición</div>"
+            "<div style='color:#10b981;font-weight:700;margin-bottom:0.5rem;'>✅ BIT CORREGIDO</div>"
+            "<div style='display:flex;align-items:center;gap:16px;flex-wrap:wrap;'>"
+            "<div style='text-align:center;'>"
+            "<div style='font-size:0.65rem;color:var(--muted);'>Posición</div>"
             f"<div style='font-size:1.2rem;color:#f59e0b;'>({syn_row}, {syn_col})</div></div>"
-            f"<div style='font-size:2rem;color:var(--muted);'>→</div>"
-            f"<div style='text-align:center;'>"
-            f"<div style='font-size:0.65rem;color:var(--muted);'>Bit Erróneo</div>"
-            f"<div style='background:#991b1b;color:white;padding:4px 14px;border-radius:6px;"
-            f"font-size:1.4rem;font-weight:bold;'>{wrong_bit}</div></div>"
-            f"<div style='font-size:2rem;color:#10b981;'>→</div>"
-            f"<div style='text-align:center;'>"
-            f"<div style='font-size:0.65rem;color:var(--muted);'>Bit Corregido</div>"
-            f"<div style='background:#065f46;color:#a7f3d0;padding:4px 14px;border-radius:6px;"
-            f"font-size:1.4rem;font-weight:bold;'>{fixed_bit}</div></div>"
-            f"</div>"
+            "<div style='font-size:2rem;color:var(--muted);'>→</div>"
+            "<div style='text-align:center;'>"
+            "<div style='font-size:0.65rem;color:var(--muted);'>Bit Erróneo</div>"
+            f"<div style='background:#991b1b;color:white;padding:4px 14px;border-radius:6px;font-size:1.4rem;font-weight:bold;'>{wrong_bit}</div></div>"
+            "<div style='font-size:2rem;color:#10b981;'>→</div>"
+            "<div style='text-align:center;'>"
+            "<div style='font-size:0.65rem;color:var(--muted);'>Bit Corregido</div>"
+            f"<div style='background:#065f46;color:#a7f3d0;padding:4px 14px;border-radius:6px;font-size:1.4rem;font-weight:bold;'>{fixed_bit}</div></div>"
+            "</div>"
         )
         correction_html += "<div style='margin-top:0.75rem;'>Matriz corregida:<br>"
         for r in range(num_data_rows):
             for c in range(cols):
                 if r == syn_row and c == syn_col:
-                    correction_html += cell(corrected_matrix[r][c], "parity-bit",
-                                             "background:#065f46;border:2px solid #10b981;")
+                    correction_html += cell(
+                        corrected_matrix[r][c],
+                        "parity-bit",
+                        "background:#065f46;border:2px solid #10b981;"
+                    )
+                elif (r, c) in error_positions:
+                    correction_html += cell(corrected_matrix[r][c], "error-bit")
                 else:
                     correction_html += cell(corrected_matrix[r][c], "data-bit")
             correction_html += cell(corrected_matrix[r][cols], "parity-bit") + "<br>"
         correction_html += "</div></div>"
+        bits_corregidos = 1
+    elif bad_rows or bad_cols:
+        correction_html = (
+            "<div style='font-family:\"IBM Plex Mono\",monospace;background:rgba(245,158,11,0.08);"
+            "padding:1rem;border-radius:8px;border:1px solid #f59e0b;margin:8px 0;color:#f59e0b;'>"
+            "⚠️ Se detectaron errores, pero no hay una única intersección fila-columna. "
+            "Esta trama excede la capacidad de corrección de un error por bloque.</div>"
+        )
+        bits_corregidos = 0
     else:
         correction_html = (
             "<div style='font-family:\"IBM Plex Mono\",monospace;background:rgba(16,185,129,0.05);"
-            "padding:1rem;border-radius:8px;border:1px solid #10b981;margin:8px 0;"
-            "color:#10b981;'>✅ No se requiere corrección — todos los síndromes son 0.</div>"
+            "padding:1rem;border-radius:8px;border:1px solid #10b981;margin:8px 0;color:#10b981;'>"
+            "✅ No se requiere corrección — todos los síndromes son 0.</div>"
         )
+        bits_corregidos = 0
 
-    # ── Tasas y métricas FEC ──
     n_data_bits = num_data_rows * cols
-    n_parity_bits = num_data_rows + cols + 1  # paridades de fila + col + master
+    n_parity_bits = num_data_rows + cols + 1
     n_total_bits = n_data_bits + n_parity_bits
     code_rate = n_data_bits / n_total_bits if n_total_bits > 0 else 0
     overhead_pct = (n_parity_bits / n_total_bits) * 100 if n_total_bits > 0 else 0
-
-    # BER simulado con la señal recibida
-    encoded_stream, _, _, _ = MatrixFEC(cols=cols).encode(bits)
-    rx_stream = inject_bit_errors(encoded_stream, ber)
-    ber_real = sum(1 for a, b in zip(encoded_stream, rx_stream) if a != b) / max(len(encoded_stream), 1)
-
-    snr_db = -10 * math.log10(max(ber_real, 1e-9)) if ber_real > 0 else 30.0
-    bits_corregidos = 1 if (syn_row != -1 and syn_col != -1) else 0
 
     return {
         "html_p1": html_p1,
@@ -585,8 +662,10 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         "html_p3": html_p3,
         "html_p4": html_p4,
         "html_p5": correction_html,
-        "err_r": err_r, "err_c": err_c,
-        "syn_row": syn_row, "syn_col": syn_col,
+        "err_r": err_r,
+        "err_c": err_c,
+        "syn_row": syn_row,
+        "syn_col": syn_col,
         "code_rate": code_rate,
         "overhead_pct": overhead_pct,
         "n_data_bits": n_data_bits,
@@ -599,7 +678,6 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         "rx_stream": rx_stream,
         "padding_needed": padding_needed,
     }
-
 
 def inject_bit_errors(bits: str, ber: float) -> str:
     if ber <= 0: return bits
