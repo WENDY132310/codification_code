@@ -39,7 +39,31 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+def repetition_encode(bits: str, n: int = 5) -> str:
+    """
+    Repite cada bit n veces.
+    n debe ser impar para permitir voto por mayoría.
+    """
+    if n < 1 or n % 2 == 0:
+        raise ValueError("n debe ser impar y mayor que 0")
+    return "".join(b * n for b in bits)
 
+
+def repetition_decode(bits: str, n: int = 5) -> str:
+    """
+    Recupera el bit original por voto mayoritario cada n bits.
+    """
+    if n < 1 or n % 2 == 0:
+        raise ValueError("n debe ser impar y mayor que 0")
+
+    out = []
+    for i in range(0, len(bits), n):
+        chunk = bits[i:i+n]
+        if len(chunk) < n:
+            chunk = chunk.ljust(n, "0")
+        ones = chunk.count("1")
+        out.append("1" if ones > n // 2 else "0")
+    return "".join(out)
 # ═════════════════════════════════════════════════════════════════════════════
 #  MERGED CSS — Terminal Lab Dark
 # ═════════════════════════════════════════════════════════════════════════════
@@ -364,11 +388,11 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
     Ahora el BER sí afecta visualmente la trama Rx, los síndromes y la corrección.
     """
     padding_needed = (cols - (len(bits) % cols)) % cols
-    padded = bits + '0' * padding_needed
+    padded = bits + "0" * padding_needed
     rows = len(padded) // cols
 
     def calc_par(s: str) -> str:
-        return '1' if s.count('1') % 2 != 0 else '0'
+        return "1" if s.count("1") % 2 != 0 else "0"
 
     def cell(val, cls, extra=""):
         return f'<span class="matrix-cell {cls}" style="{extra}">{val}</span>'
@@ -380,8 +404,10 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
             "html_p3": "<div>Sin datos.</div>",
             "html_p4": "<div>Sin datos.</div>",
             "html_p5": "<div>Sin datos.</div>",
-            "err_r": None, "err_c": None,
-            "syn_row": -1, "syn_col": -1,
+            "err_r": None,
+            "err_c": None,
+            "syn_row": -1,
+            "syn_col": -1,
             "code_rate": 0.0,
             "overhead_pct": 0.0,
             "n_data_bits": 0,
@@ -405,6 +431,7 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
     for c in range(cols):
         col_data = "".join(matrix[r][c] for r in range(rows))
         col_pars.append(calc_par(col_data))
+
     master = calc_par("".join(col_pars))
     tx_col_pars = col_pars[:]
     tx_master = master
@@ -447,7 +474,7 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
 
     rx_bottom = list(rx_stream[idx:idx + cols + 1])
     if len(rx_bottom) < cols + 1:
-        rx_bottom += ['0'] * ((cols + 1) - len(rx_bottom))
+        rx_bottom += ["0"] * ((cols + 1) - len(rx_bottom))
 
     rx_col_pars = rx_bottom[:cols]
     rx_master = rx_bottom[cols]
@@ -500,8 +527,11 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         xor_val = int(exp_p) ^ int(rx_p)
         color = "#ef4444" if xor_val else "#10b981"
         syndrome_details.append({
-            "fila": r, "esperado": exp_p, "recibido": rx_p,
-            "xor": xor_val, "color": color
+            "fila": r,
+            "esperado": exp_p,
+            "recibido": rx_p,
+            "xor": xor_val,
+            "color": color
         })
         if xor_val:
             bad_rows.append(r)
@@ -515,8 +545,11 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         xor_val = int(exp_p) ^ int(rx_p)
         color = "#ef4444" if xor_val else "#10b981"
         col_syn_details.append({
-            "col": c, "esperado": exp_p, "recibido": rx_p,
-            "xor": xor_val, "color": color
+            "col": c,
+            "esperado": exp_p,
+            "recibido": rx_p,
+            "xor": xor_val,
+            "color": color
         })
         if xor_val:
             bad_cols.append(c)
@@ -598,7 +631,7 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
 
     if syn_row != -1 and syn_col != -1:
         wrong_bit = corrected_matrix[syn_row][syn_col]
-        fixed_bit = '0' if wrong_bit == '1' else '1'
+        fixed_bit = "0" if wrong_bit == "1" else "1"
         corrected_matrix[syn_row][syn_col] = fixed_bit
         correction_html = (
             "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-1);"
@@ -678,14 +711,22 @@ def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict
         "rx_stream": rx_stream,
         "padding_needed": padding_needed,
     }
-
+    
 def inject_bit_errors(bits: str, ber: float) -> str:
-    if ber <= 0: return bits
-    bit_list = list(bits)
-    for _ in range(int(len(bit_list) * (ber / 1.5))):
-        idx = random.randint(0, len(bit_list) - 1)
-        bit_list[idx] = '1' if bit_list[idx] == '0' else '0'
-    return "".join(bit_list)
+    """
+    Invierte cada bit con probabilidad BER.
+    """
+    if not bits or ber <= 0:
+        return bits
+
+    rng = random.Random()
+    out = []
+    for b in bits:
+        if rng.random() < ber:
+            out.append("0" if b == "1" else "1")
+        else:
+            out.append(b)
+    return "".join(out)
 
 
 def recommend_modulation(_: int) -> str:
