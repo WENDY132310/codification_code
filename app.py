@@ -339,6 +339,268 @@ def create_download_link(payload_dict: dict, filename: str) -> str:
             f'download="{filename}" class="dl-btn">⬇ Descargar Payload .BIN ({filename})</a>')
 
 
+def create_bytes_download_link(data: bytes, filename: str, label: str = None) -> str:
+    b64 = base64.b64encode(data).decode()
+    lbl = label or f"⬇ Descargar {filename}"
+    ext = filename.rsplit('.', 1)[-1].upper()
+    mime = {
+        "BIN": "application/octet-stream",
+        "TXT": "text/plain",
+        "WAV": "audio/wav",
+        "JSON": "application/json",
+    }.get(ext, "application/octet-stream")
+    return (f'<a href="data:{mime};base64,{b64}" '
+            f'download="{filename}" class="dl-btn">{lbl} ({filename})</a>')
+
+
+def create_text_download_link(text: str, filename: str, label: str = None) -> str:
+    return create_bytes_download_link(text.encode("utf-8"), filename, label)
+
+
+# ─── FEC VISUAL STEP-BY-STEP ────────────────────────────────────────────────
+def render_fec_visual_steps(bits: str, cols: int = 4, ber: float = 0.05) -> dict:
+    """
+    Genera HTML detallado para los 5 pasos de FEC Matricial 2D.
+    Retorna dict con html de cada paso y métricas de canal.
+    """
+    # ── Preparar datos ──
+    padding_needed = (cols - (len(bits) % cols)) % cols
+    padded = bits + '0' * padding_needed
+    rows = len(padded) // cols
+
+    def calc_par(s: str) -> str:
+        return '1' if s.count('1') % 2 != 0 else '0'
+
+    # Construir matriz de datos + paridades de fila
+    matrix: List[List[str]] = []
+    for r in range(rows):
+        row = list(padded[r * cols:(r + 1) * cols])
+        row_p = calc_par("".join(row))
+        matrix.append(row + [row_p])
+
+    # Paridades de columna
+    col_pars = []
+    for c in range(cols):
+        col_data = "".join(matrix[r][c] for r in range(rows))
+        col_pars.append(calc_par(col_data))
+    master = calc_par("".join(col_pars))
+    col_pars.append(master)
+    matrix.append(col_pars)
+
+    num_data_rows = rows
+
+    cell = lambda val, cls, extra="": (
+        f'<span class="matrix-cell {cls}" style="{extra}">{val}</span>'
+    )
+
+    # ── PASO 1: Matriz Original de datos ──
+    html_p1 = "<div style='margin:8px 0'>"
+    for r in range(num_data_rows):
+        for c in range(cols):
+            html_p1 += cell(matrix[r][c], "data-bit")
+        html_p1 += "<br>"
+    html_p1 += "</div>"
+
+    # ── PASO 2: Matriz con Paridades ──
+    html_p2 = "<div style='margin:8px 0'>"
+    for r in range(num_data_rows):
+        for c in range(cols):
+            html_p2 += cell(matrix[r][c], "data-bit")
+        html_p2 += cell(matrix[r][cols], "parity-bit") + "<br>"
+    # fila col-paridades
+    for c in range(cols):
+        html_p2 += cell(col_pars[c], "parity-bit")
+    html_p2 += cell(master, "parity-bit", "background:#9333ea;") + "<br>"
+    html_p2 += "</div>"
+
+    # ── PASO 3: Inyectar error ──
+    # Elegimos una posición de datos al azar (reproducible con la semilla)
+    rng = random.Random(42)
+    err_r = rng.randint(0, num_data_rows - 1)
+    err_c = rng.randint(0, cols - 1)
+    rx_matrix = [row[:] for row in matrix]
+    original_bit = rx_matrix[err_r][err_c]
+    rx_matrix[err_r][err_c] = '0' if original_bit == '1' else '1'
+
+    html_p3 = "<div style='margin:8px 0'>"
+    for r in range(num_data_rows):
+        for c in range(cols):
+            if r == err_r and c == err_c:
+                html_p3 += cell(rx_matrix[r][c], "error-bit")
+            else:
+                html_p3 += cell(rx_matrix[r][c], "data-bit")
+        html_p3 += cell(rx_matrix[r][cols], "parity-bit") + "<br>"
+    for c in range(cols):
+        html_p3 += cell(col_pars[c], "parity-bit")
+    html_p3 += cell(master, "parity-bit", "background:#9333ea;") + "<br>"
+    html_p3 += "</div>"
+
+    # ── PASO 4: Síndrome ──
+    syn_row, syn_col = -1, -1
+    syndrome_details = []
+    for r in range(num_data_rows):
+        row_data = "".join(rx_matrix[r][:cols])
+        exp_p = calc_par(row_data)
+        rx_p = rx_matrix[r][cols]
+        xor_val = int(exp_p) ^ int(rx_p)
+        color = "#ef4444" if xor_val else "#10b981"
+        syndrome_details.append({
+            "fila": r, "esperado": exp_p, "recibido": rx_p,
+            "xor": xor_val, "color": color
+        })
+        if exp_p != rx_p:
+            syn_row = r
+
+    col_syn_details = []
+    for c in range(cols):
+        col_data = "".join(rx_matrix[r][c] for r in range(num_data_rows))
+        exp_p = calc_par(col_data)
+        rx_p = col_pars[c]
+        xor_val = int(exp_p) ^ int(rx_p)
+        color = "#ef4444" if xor_val else "#10b981"
+        col_syn_details.append({
+            "col": c, "esperado": exp_p, "recibido": rx_p,
+            "xor": xor_val, "color": color
+        })
+        if exp_p != rx_p:
+            syn_col = c
+
+    M = "#1a2540"
+    html_p4 = (
+        "<div style='font-family:\"IBM Plex Mono\",monospace;font-size:0.75rem;"
+        "background:var(--bg-1);padding:1rem;border-radius:8px;border:1px solid var(--border);margin:8px 0;'>"
+        "<div style='color:var(--cyan);margin-bottom:0.5rem;font-weight:700;'>SÍNDROMES DE FILA (XOR Paridad)</div>"
+        "<table style='border-collapse:collapse;width:100%;'>"
+        "<tr style='color:var(--muted);font-size:0.65rem;'>"
+        "<th style='padding:3px 8px;text-align:left;'>Fila</th>"
+        "<th>Paridad Esperada</th><th>Paridad Recibida</th>"
+        "<th>XOR (Síndrome)</th><th>Estado</th></tr>"
+    )
+    for sd in syndrome_details:
+        icon = "❌ ERROR" if sd["xor"] else "✅ OK"
+        html_p4 += (
+            f"<tr style='background:{M};border:1px solid #1e293b;'>"
+            f"<td style='padding:4px 8px;color:var(--txt);'>Fila {sd['fila']}</td>"
+            f"<td style='text-align:center;color:#06b6d4;'>{sd['esperado']}</td>"
+            f"<td style='text-align:center;color:#8b5cf6;'>{sd['recibido']}</td>"
+            f"<td style='text-align:center;color:{sd['color']};font-weight:bold;'>{sd['xor']}</td>"
+            f"<td style='text-align:center;color:{sd['color']};'>{icon}</td></tr>"
+        )
+    html_p4 += (
+        "</table>"
+        "<div style='color:var(--cyan);margin:0.75rem 0 0.5rem;font-weight:700;'>SÍNDROMES DE COLUMNA (XOR Paridad)</div>"
+        "<table style='border-collapse:collapse;width:100%;'>"
+        "<tr style='color:var(--muted);font-size:0.65rem;'>"
+        "<th style='padding:3px 8px;text-align:left;'>Columna</th>"
+        "<th>Paridad Esperada</th><th>Paridad Recibida</th>"
+        "<th>XOR (Síndrome)</th><th>Estado</th></tr>"
+    )
+    for sd in col_syn_details:
+        icon = "❌ ERROR" if sd["xor"] else "✅ OK"
+        html_p4 += (
+            f"<tr style='background:{M};border:1px solid #1e293b;'>"
+            f"<td style='padding:4px 8px;color:var(--txt);'>Col {sd['col']}</td>"
+            f"<td style='text-align:center;color:#06b6d4;'>{sd['esperado']}</td>"
+            f"<td style='text-align:center;color:#8b5cf6;'>{sd['recibido']}</td>"
+            f"<td style='text-align:center;color:{sd['color']};font-weight:bold;'>{sd['xor']}</td>"
+            f"<td style='text-align:center;color:{sd['color']};'>{icon}</td></tr>"
+        )
+    html_p4 += "</table>"
+    if syn_row != -1 and syn_col != -1:
+        html_p4 += (
+            f"<div style='margin-top:0.75rem;background:rgba(239,68,68,0.1);border:1px solid #ef4444;"
+            f"padding:8px 12px;border-radius:6px;color:#ef4444;'>"
+            f"🎯 <strong>Error localizado en: Fila={syn_row}, Columna={syn_col}</strong></div>"
+        )
+    else:
+        html_p4 += (
+            "<div style='margin-top:0.75rem;background:rgba(16,185,129,0.1);border:1px solid #10b981;"
+            "padding:8px 12px;border-radius:6px;color:#10b981;'>"
+            "✅ <strong>Síndrome = 0 — Trama limpia, sin errores detectados.</strong></div>"
+        )
+    html_p4 += "</div>"
+
+    # ── PASO 5: Corrección ──
+    corrected_matrix = [row[:] for row in rx_matrix]
+    correction_html = ""
+    if syn_row != -1 and syn_col != -1:
+        wrong_bit = corrected_matrix[syn_row][syn_col]
+        fixed_bit = '0' if wrong_bit == '1' else '1'
+        corrected_matrix[syn_row][syn_col] = fixed_bit
+        correction_html = (
+            "<div style='font-family:\"IBM Plex Mono\",monospace;background:var(--bg-1);"
+            "padding:1rem;border-radius:8px;border:1px solid var(--border);margin:8px 0;'>"
+            f"<div style='color:#10b981;font-weight:700;margin-bottom:0.5rem;'>✅ BIT CORREGIDO</div>"
+            f"<div style='display:flex;align-items:center;gap:16px;flex-wrap:wrap;'>"
+            f"<div style='text-align:center;'>"
+            f"<div style='font-size:0.65rem;color:var(--muted);'>Posición</div>"
+            f"<div style='font-size:1.2rem;color:#f59e0b;'>({syn_row}, {syn_col})</div></div>"
+            f"<div style='font-size:2rem;color:var(--muted);'>→</div>"
+            f"<div style='text-align:center;'>"
+            f"<div style='font-size:0.65rem;color:var(--muted);'>Bit Erróneo</div>"
+            f"<div style='background:#991b1b;color:white;padding:4px 14px;border-radius:6px;"
+            f"font-size:1.4rem;font-weight:bold;'>{wrong_bit}</div></div>"
+            f"<div style='font-size:2rem;color:#10b981;'>→</div>"
+            f"<div style='text-align:center;'>"
+            f"<div style='font-size:0.65rem;color:var(--muted);'>Bit Corregido</div>"
+            f"<div style='background:#065f46;color:#a7f3d0;padding:4px 14px;border-radius:6px;"
+            f"font-size:1.4rem;font-weight:bold;'>{fixed_bit}</div></div>"
+            f"</div>"
+        )
+        correction_html += "<div style='margin-top:0.75rem;'>Matriz corregida:<br>"
+        for r in range(num_data_rows):
+            for c in range(cols):
+                if r == syn_row and c == syn_col:
+                    correction_html += cell(corrected_matrix[r][c], "parity-bit",
+                                             "background:#065f46;border:2px solid #10b981;")
+                else:
+                    correction_html += cell(corrected_matrix[r][c], "data-bit")
+            correction_html += cell(corrected_matrix[r][cols], "parity-bit") + "<br>"
+        correction_html += "</div></div>"
+    else:
+        correction_html = (
+            "<div style='font-family:\"IBM Plex Mono\",monospace;background:rgba(16,185,129,0.05);"
+            "padding:1rem;border-radius:8px;border:1px solid #10b981;margin:8px 0;"
+            "color:#10b981;'>✅ No se requiere corrección — todos los síndromes son 0.</div>"
+        )
+
+    # ── Tasas y métricas FEC ──
+    n_data_bits = num_data_rows * cols
+    n_parity_bits = num_data_rows + cols + 1  # paridades de fila + col + master
+    n_total_bits = n_data_bits + n_parity_bits
+    code_rate = n_data_bits / n_total_bits if n_total_bits > 0 else 0
+    overhead_pct = (n_parity_bits / n_total_bits) * 100 if n_total_bits > 0 else 0
+
+    # BER simulado con la señal recibida
+    encoded_stream, _, _, _ = MatrixFEC(cols=cols).encode(bits)
+    rx_stream = inject_bit_errors(encoded_stream, ber)
+    ber_real = sum(1 for a, b in zip(encoded_stream, rx_stream) if a != b) / max(len(encoded_stream), 1)
+
+    snr_db = -10 * math.log10(max(ber_real, 1e-9)) if ber_real > 0 else 30.0
+    bits_corregidos = 1 if (syn_row != -1 and syn_col != -1) else 0
+
+    return {
+        "html_p1": html_p1,
+        "html_p2": html_p2,
+        "html_p3": html_p3,
+        "html_p4": html_p4,
+        "html_p5": correction_html,
+        "err_r": err_r, "err_c": err_c,
+        "syn_row": syn_row, "syn_col": syn_col,
+        "code_rate": code_rate,
+        "overhead_pct": overhead_pct,
+        "n_data_bits": n_data_bits,
+        "n_parity_bits": n_parity_bits,
+        "n_total_bits": n_total_bits,
+        "ber_real": ber_real,
+        "snr_db": snr_db,
+        "bits_corregidos": bits_corregidos,
+        "encoded_stream": encoded_stream,
+        "rx_stream": rx_stream,
+        "padding_needed": padding_needed,
+    }
+
+
 def inject_bit_errors(bits: str, ber: float) -> str:
     if ber <= 0: return bits
     bit_list = list(bits)
@@ -905,6 +1167,76 @@ def render_no_file(icon: str, texto: str, subtexto: str) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 #  CANAL LAB: TAB RENDERERS
 # ═════════════════════════════════════════════════════════════════════════════
+def _render_fec_metricas(fv: dict) -> None:
+    """Muestra métricas de canal FEC en columnas."""
+    section_label("📊", "MÉTRICAS DE CANAL FEC")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("Tasa de Código R", f"{fv['code_rate']:.3f}", f"k/n")
+    with c2: st.metric("Overhead FEC", f"{fv['overhead_pct']:.1f}%", f"{fv['n_parity_bits']} bits paridad")
+    with c3: st.metric("BER Canal", f"{fv['ber_real']:.4f}", "bits erróneos / total")
+    with c4: st.metric("SNR Estimado", f"{fv['snr_db']:.1f} dB", "")
+    with c5: st.metric("Bits Corregidos", str(fv['bits_corregidos']), "por FEC 2D")
+    c6, c7, c8 = st.columns(3)
+    with c6: st.metric("Bits de Datos", str(fv['n_data_bits']), "")
+    with c7: st.metric("Bits de Paridad", str(fv['n_parity_bits']), "")
+    with c8: st.metric("Bits Totales Tx", str(fv['n_total_bits']), "")
+
+
+def _render_fec_paso_a_paso(fv: dict) -> None:
+    """Renderiza los 5 pasos de FEC Matricial 2D con HTML visual."""
+    section_label("🛡️", "FEC MATRICIAL 2D — EXPLICACIÓN PASO A PASO")
+    info_box("🧠",
+             "El <strong>FEC (Forward Error Correction)</strong> matricial 2D organiza los bits en una "
+             "matriz rectangular. Cada fila y cada columna tiene un <strong>bit de paridad par (XOR)</strong>. "
+             "Al llegar al receptor, se recalculan todas las paridades. Si una fila Y una columna "
+             "tienen síndrome ≠ 0, su intersección localiza <strong>exactamente</strong> el bit erróneo "
+             "y se invierte — sin retransmisión. Tasa de código: R = k/n.", "violet")
+
+    steps = [
+        ("📐 PASO 1 — MATRIZ ORIGINAL DE DATOS",
+         "Los bits Huffman se ordenan en una matriz de <strong>k filas × cols columnas</strong>. "
+         "Cada celda azul es un bit de información puro. "
+         "Esta es la representación antes de añadir redundancia.",
+         fv["html_p1"]),
+
+        ("➕ PASO 2 — CÁLCULO DE PARIDADES (Codificación)",
+         "<strong>Paridad de fila:</strong> XOR de todos los bits de cada fila → bit verde al final.<br>"
+         "<strong>Paridad de columna:</strong> XOR de todos los bits de cada columna → fila verde al fondo.<br>"
+         "<strong>Paridad maestra:</strong> XOR de todas las paridades de columna → celda morada (esquina).<br>"
+         "Fórmula: p = b₀ ⊕ b₁ ⊕ b₂ ⊕ … ⊕ bₙ (donde ⊕ es XOR bit a bit).",
+         fv["html_p2"]),
+
+        (f"⚡ PASO 3 — ERROR INYECTADO (Canal AWGN)",
+         f"El canal introduce ruido gaussiano (AWGN). Un bit en la posición "
+         f"<strong>Fila {fv['err_r']}, Columna {fv['err_c']}</strong> fue invertido por el canal. "
+         f"El bit rojo parpadeante es el <strong>bit erróneo recibido</strong>. "
+         f"Las paridades de fila y columna de ese bit ya no coinciden con lo transmitido.",
+         fv["html_p3"]),
+
+        ("🔬 PASO 4 — DETECTOR DE SÍNDROME",
+         "El receptor recalcula <strong>cada paridad</strong> y la compara (XOR) con la recibida.<br>"
+         "Si el XOR de una fila = 1 → esa fila contiene un error.<br>"
+         "Si el XOR de una columna = 1 → esa columna contiene un error.<br>"
+         "La <strong>intersección fila×columna</strong> con síndrome=1 identifica el bit exacto.",
+         fv["html_p4"]),
+
+        ("✅ PASO 5 — CORRECCIÓN DEL BIT",
+         "El receptor invierte el bit en la intersección detectada: <code>0→1</code> o <code>1→0</code>. "
+         "Esto se hace <strong>sin retransmisión</strong> (por eso se llama Forward Error Correction). "
+         "La tasa de corrección es de 1 error por bloque (el FEC 2D detecta 2 errores pero solo corrige 1).",
+         fv["html_p5"]),
+    ]
+
+    for titulo, detalle, html in steps:
+        with st.expander(titulo, expanded=True):
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:var(--txt-dim);margin-bottom:8px;line-height:1.6;'>"
+                f"{detalle}</div>",
+                unsafe_allow_html=True
+            )
+            st.markdown(html, unsafe_allow_html=True)
+
+
 def render_canal_texto() -> None:
     col_tx, col_rx = st.columns(2)
 
@@ -913,27 +1245,60 @@ def render_canal_texto() -> None:
         c1, c2, c3 = st.columns(3)
         with c1: mod_txt = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="c_tx_mod")
         with c2: fec_cols = st.selectbox("Ancho FEC", [4, 8, 16], key="c_tx_fec")
-        with c3: ber_txt = st.slider("BER AWGN", 0.0, 1.0, 0.0, key="c_tx_ber")
+        with c3: ber_txt = st.slider("BER AWGN", 0.0, 1.0, 0.05, key="c_tx_ber")
         st.info(recommend_modulation(fec_cols))
         text_input = st.text_area("Payload:", "HOLA MUNDO", key="c_txt_payload")
 
         if st.button("▶ Ejecutar Pipeline Tx", type="primary", key="c_btn_tx_txt"):
-            tx_bits, inverse, _, _ = HuffmanCoderCanal().encode(text_input)
-            with st.expander("🛡️ Inserción FEC 2D", expanded=True):
-                st.caption(f"Matriz de {fec_cols} columnas — Verde=Paridad, Morado=Paridad Maestra")
-                fec = MatrixFEC(cols=fec_cols)
-                fec_bits, _, tx_html, padding = fec.encode(tx_bits)
-                st.markdown(tx_html, unsafe_allow_html=True)
+            tx_bits, inverse, _, freq = HuffmanCoderCanal().encode(text_input)
+
+            # ── Métricas de Fuente ──
+            section_label("📊", "MÉTRICAS DE FUENTE (Huffman)")
+            total_sym = sum(freq.values())
+            probs = {s: f / total_sym for s, f in freq.items()}
+            H = -sum(p * math.log2(p) for p in probs.values() if p > 0)
+            L_bar = len(tx_bits) / total_sym if total_sym > 0 else 0
+            eta = H / L_bar if L_bar > 0 else 0
+            c1m, c2m, c3m, c4m = st.columns(4)
+            with c1m: st.metric("Entropía H(X)", f"{H:.4f}", "bits/símbolo")
+            with c2m: st.metric("Long. Promedio L̄", f"{L_bar:.4f}", "bits/símbolo")
+            with c3m: st.metric("Eficiencia η", f"{eta*100:.2f}%", "")
+            with c4m: st.metric("Redundancia", f"{(1-eta)*100:.2f}%", "")
+
+            # ── FEC Visual completo ──
+            fv = render_fec_visual_steps(tx_bits, cols=fec_cols, ber=ber_txt)
+            _render_fec_paso_a_paso(fv)
+            _render_fec_metricas(fv)
+
+            fec = MatrixFEC(cols=fec_cols)
+            fec_bits, _, tx_html, padding = fec.encode(tx_bits)
+
             with st.expander("📡 Constelación + AWGN", expanded=True):
                 mod = Modulator(mod_txt)
                 signal = mod.modulate(fec_bits)
                 if len(signal) > 0:
                     st.pyplot(mod.render_constellation(mod.channel_awgn(signal, ber_txt)))
+
             meta = {"inverse": inverse, "alg": "Huffman", "cols": fec_cols, "padding": padding}
             payload = {"modulo": "texto", "metadata": meta,
                        "original_fec_bits": fec_bits,
                        "rx_bits": inject_bit_errors(fec_bits, ber_txt)}
+
+            section_label("⬇️", "DESCARGAS")
+            # Payload canal
             st.markdown(create_download_link(payload, "texto_canal.bin"), unsafe_allow_html=True)
+            # Bits fuente codificados (Huffman)
+            st.markdown(
+                create_bytes_download_link(tx_bits.encode(), "huffman_encoded.txt",
+                                           "⬇ Descargar Bits Fuente Codificados (Huffman)"),
+                unsafe_allow_html=True)
+            # Señal modulada como JSON
+            if len(signal) > 0:
+                sig_json = json.dumps({"scheme": mod_txt, "signal": signal.tolist()})
+                st.markdown(
+                    create_bytes_download_link(sig_json.encode(), "signal_modulada.json",
+                                               "⬇ Descargar Señal Modulada"),
+                    unsafe_allow_html=True)
 
     with col_rx:
         section_label("📥", "MÓDULO RECEPTOR")
@@ -958,6 +1323,12 @@ def render_canal_texto() -> None:
                         source_bits, data["metadata"]["inverse"])
                     st.markdown(f"> **OUTPUT:** `{res_txt}`")
                     if logs: st.dataframe(pd.DataFrame(logs), use_container_width=True)
+                    # Descarga del texto recuperado
+                    section_label("⬇️", "DESCARGAS Rx")
+                    st.markdown(
+                        create_bytes_download_link(res_txt.encode(), "texto_recuperado.txt",
+                                                   "⬇ Descargar Texto Recuperado"),
+                        unsafe_allow_html=True)
                 except Exception as e:
                     st.error(f"Error de decodificación: {e}")
 
@@ -967,9 +1338,10 @@ def render_canal_imagen() -> None:
 
     with col_tx:
         section_label("📤", "COMPRESIÓN ESPACIAL (DCT)")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1: fec_img_cols = st.selectbox("Ancho FEC", [4, 8, 16], key="c_tx_img_fec")
-        with c2: ber_img = st.slider("BER", 0.0, 1.0, 0.0, key="c_tx_img_ber")
+        with c2: ber_img = st.slider("BER", 0.0, 1.0, 0.05, key="c_tx_img_ber")
+        with c3: mod_img = st.selectbox("Modulación", ["QPSK", "BPSK", "QAM16"], key="c_tx_img_mod")
         img_file = st.file_uploader("Sube Imagen", type=["png", "jpg"], key="c_img_up")
 
         if st.button("▶ Ejecutar DCT Global", type="primary", key="c_btn_tx_img") and img_file:
@@ -983,6 +1355,27 @@ def render_canal_imagen() -> None:
                 img_arr = np.array(img_raw)
                 dct_blocks, padded_shape = process_full_image_dct(img_arr)
                 tx_bits = ''.join(format(int(abs(x)), '08b') for x in dct_blocks.flatten())
+
+                # Métricas de fuente DCT
+                section_label("📊", "MÉTRICAS DE FUENTE (DCT)")
+                orig_bytes = len(img_arr.flatten())
+                comp_bytes = max(1, len(tx_bits) // 8)
+                tasa = orig_bytes / comp_bytes
+                vals = list(img_arr.flatten())
+                from collections import Counter as _Ctr
+                freq_im = _Ctr(vals)
+                tot_im = sum(freq_im.values())
+                H_im = -sum((v/tot_im)*math.log2(v/tot_im) for v in freq_im.values() if v > 0)
+                ci1, ci2, ci3 = st.columns(3)
+                with ci1: st.metric("Entropía H(X)", f"{H_im:.4f}", "bits/pixel")
+                with ci2: st.metric("Tasa DCT", f"{tasa:.2f}:1", "")
+                with ci3: st.metric("Pixels → Bits", f"{orig_bytes} → {len(tx_bits)}", "")
+
+                # FEC visual
+                fv = render_fec_visual_steps(tx_bits[:128], cols=fec_img_cols, ber=ber_img)
+                _render_fec_paso_a_paso(fv)
+                _render_fec_metricas(fv)
+
                 fec = MatrixFEC(cols=fec_img_cols)
                 fec_bits, _, _, padding = fec.encode(tx_bits)
                 meta = {
@@ -994,7 +1387,20 @@ def render_canal_imagen() -> None:
                 payload = {"modulo": "imagen", "metadata": meta,
                            "original_fec_bits": fec_bits,
                            "rx_bits": inject_bit_errors(fec_bits, ber_img)}
+
+                # Constelación
+                with st.expander("📡 Constelación Imagen", expanded=False):
+                    mod = Modulator(mod_img)
+                    sig = mod.modulate(fec_bits[:512])
+                    if len(sig) > 0:
+                        st.pyplot(mod.render_constellation(mod.channel_awgn(sig, ber_img)))
+
+                section_label("⬇️", "DESCARGAS")
                 st.markdown(create_download_link(payload, "imagen_canal.bin"), unsafe_allow_html=True)
+                st.markdown(
+                    create_bytes_download_link(tx_bits.encode(), "dct_bits_fuente.txt",
+                                               "⬇ Descargar Bits DCT Codificados"),
+                    unsafe_allow_html=True)
 
     with col_rx:
         section_label("📥", "RECONSTRUCCIÓN IDCT")
@@ -1003,9 +1409,13 @@ def render_canal_imagen() -> None:
             data = json.load(rx_file_img)
             with st.expander("🛠️ FEC Imagen"):
                 fec = MatrixFEC(cols=data["metadata"]["cols"])
-                source_bits, _, syndromes, _ = fec.decode_and_correct(
+                source_bits, _, syndromes, correction = fec.decode_and_correct(
                     data["rx_bits"], data["metadata"]["padding"])
-                if syndromes: st.error("Síndromes detectados. Reparación matricial ejecutada.")
+                if syndromes:
+                    st.error("Síndromes detectados. Reparación matricial ejecutada.")
+                    st.success(correction)
+                else:
+                    st.success("✅ Sin errores detectados en canal imagen.")
             with st.expander("🧩 Renderizado Final", expanded=True):
                 try:
                     vals = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
@@ -1017,6 +1427,15 @@ def render_canal_imagen() -> None:
                     st.success("Reconstrucción Exitosa")
                     st.image(PILImage.fromarray(rec_arr), caption="Imagen Reconstruida en Rx",
                              use_container_width=True)
+                    # Descargar imagen reconstruida
+                    rec_pil = PILImage.fromarray(rec_arr)
+                    buf_img = io.BytesIO()
+                    rec_pil.save(buf_img, format="PNG")
+                    section_label("⬇️", "DESCARGAS Rx")
+                    st.markdown(
+                        create_bytes_download_link(buf_img.getvalue(), "imagen_recuperada.png",
+                                                   "⬇ Descargar Imagen Recuperada"),
+                        unsafe_allow_html=True)
                 except Exception as e:
                     st.error(f"Error de reconstrucción: {e}")
 
@@ -1026,9 +1445,10 @@ def render_canal_audio() -> None:
 
     with col_tx:
         section_label("📤", "COMPANDING μ-LAW")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1: fec_aud_cols = st.selectbox("Ancho FEC", [4, 8, 16], key="c_tx_aud_fec")
-        with c2: ber_aud = st.slider("BER", 0.0, 1.0, 0.0, key="c_tx_aud_ber")
+        with c2: ber_aud = st.slider("BER", 0.0, 1.0, 0.05, key="c_tx_aud_ber")
+        with c3: mod_aud = st.selectbox("Modulación", ["BPSK", "QPSK", "QAM16"], key="c_tx_aud_mod")
         aud_file = st.file_uploader("Sube Audio WAV", type=["wav"], key="c_aud_up")
 
         if st.button("▶ Ejecutar Pipeline Audio", type="primary", key="c_btn_tx_aud") and aud_file:
@@ -1038,13 +1458,49 @@ def render_canal_audio() -> None:
             samples = np.frombuffer(frames, dtype=np.int16)
             encoded = MuLawCodec.encode(samples)
             tx_bits = ''.join(format(x & 0xFF, '08b') for x in encoded.tolist())
+
+            # Métricas fuente
+            section_label("📊", "MÉTRICAS DE FUENTE (μ-Law G.711)")
+            orig_bytes = len(samples) * 2
+            comp_bytes = len(encoded)
+            tasa_aud = orig_bytes / max(comp_bytes, 1)
+            vals_aud = list(samples.astype(np.int16))
+            from collections import Counter as _Ctr2
+            freq_aud = _Ctr2(np.clip(samples // 1024, -16, 15).tolist())
+            tot_aud = sum(freq_aud.values())
+            H_aud = -sum((v/tot_aud)*math.log2(v/tot_aud) for v in freq_aud.values() if v > 0)
+            ca1, ca2, ca3, ca4 = st.columns(4)
+            with ca1: st.metric("Entropía H(X)", f"{H_aud:.4f}", "bits/muestra")
+            with ca2: st.metric("Tasa μ-Law", f"{tasa_aud:.2f}:1", "16-bit → 8-bit")
+            with ca3: st.metric("Muestras Orig", f"{len(samples):,}", "")
+            with ca4: st.metric("Bytes μ-Law", f"{comp_bytes:,}", "")
+
+            # FEC visual
+            fv = render_fec_visual_steps(tx_bits[:128], cols=fec_aud_cols, ber=ber_aud)
+            _render_fec_paso_a_paso(fv)
+            _render_fec_metricas(fv)
+
             fec = MatrixFEC(cols=fec_aud_cols)
             fec_bits, _, _, padding = fec.encode(tx_bits)
+
+            # Constelación
+            with st.expander("📡 Constelación Audio", expanded=False):
+                mod = Modulator(mod_aud)
+                sig = mod.modulate(fec_bits[:512])
+                if len(sig) > 0:
+                    st.pyplot(mod.render_constellation(mod.channel_awgn(sig, ber_aud)))
+
             meta = {"params": params._asdict(), "cols": fec_aud_cols, "padding": padding}
             payload = {"modulo": "audio", "metadata": meta,
                        "original_fec_bits": fec_bits,
                        "rx_bits": inject_bit_errors(fec_bits, ber_aud)}
+
+            section_label("⬇️", "DESCARGAS")
             st.markdown(create_download_link(payload, "audio_canal.bin"), unsafe_allow_html=True)
+            st.markdown(
+                create_bytes_download_link(tx_bits.encode(), "mulaw_bits_fuente.txt",
+                                           "⬇ Descargar Bits μ-Law Codificados"),
+                unsafe_allow_html=True)
 
     with col_rx:
         section_label("📥", "EXPANSIÓN A PCM")
@@ -1056,6 +1512,7 @@ def render_canal_audio() -> None:
                 source_bits, _, syndromes, correction = fec.decode_and_correct(
                     data["rx_bits"], data["metadata"]["padding"])
                 if syndromes: st.warning(f"Anomalías corregidas: {correction}")
+                else: st.success("✅ Sin errores detectados en canal audio.")
             with st.expander("🧩 Reproducción DAC", expanded=True):
                 try:
                     rx_bytes = [int(source_bits[i:i+8], 2) for i in range(0, len(source_bits), 8)]
@@ -1069,6 +1526,11 @@ def render_canal_audio() -> None:
                         wav_out.writeframes(decoded_pcm.tobytes())
                     st.success("Reconstrucción de Audio Exitosa")
                     st.audio(out_buffer.getvalue())
+                    section_label("⬇️", "DESCARGAS Rx")
+                    st.markdown(
+                        create_bytes_download_link(out_buffer.getvalue(), "audio_recuperado.wav",
+                                                   "⬇ Descargar Audio Recuperado WAV"),
+                        unsafe_allow_html=True)
                 except Exception as e:
                     st.error(f"Error: {e}")
 
@@ -1078,9 +1540,10 @@ def render_canal_video() -> None:
 
     with col_tx:
         section_label("📤", "PROTECCIÓN CABECERA NAL")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1: fec_vid_cols = st.selectbox("Ancho FEC", [4, 8, 16], key="c_tx_vid_fec")
-        with c2: ber_vid = st.slider("BER", 0.0, 1.0, 0.0, key="c_tx_vid_ber")
+        with c2: ber_vid = st.slider("BER", 0.0, 1.0, 0.05, key="c_tx_vid_ber")
+        with c3: mod_vid = st.selectbox("Modulación", ["QAM16", "QPSK", "BPSK"], key="c_tx_vid_mod")
         vid_file = st.file_uploader("Sube Video MP4", type=["mp4", "mov"], key="c_vid_up")
         if vid_file:
             st.markdown("**Video Original:**")
@@ -1090,17 +1553,48 @@ def render_canal_video() -> None:
                 header_bytes = vid_bytes[:250]
                 body_bytes = vid_bytes[250:]
                 tx_bits = bytes_to_bits(header_bytes)
+
+                # Métricas fuente video
+                section_label("📊", "MÉTRICAS DE FUENTE (H.264 Cabecera)")
+                from collections import Counter as _Ctr3
+                freq_vid = _Ctr3(list(header_bytes))
+                tot_vid = sum(freq_vid.values())
+                H_vid = -sum((v/tot_vid)*math.log2(v/tot_vid) for v in freq_vid.values() if v > 0)
+                cv1, cv2, cv3 = st.columns(3)
+                with cv1: st.metric("Entropía Cabecera", f"{H_vid:.4f}", "bits/byte")
+                with cv2: st.metric("Bytes Cabecera", f"{len(header_bytes)}", "NAL Header")
+                with cv3: st.metric("Bytes Cuerpo", f"{len(body_bytes):,}", "Stream H.264")
+
+                # FEC visual
+                fv = render_fec_visual_steps(tx_bits[:128], cols=fec_vid_cols, ber=ber_vid)
+                _render_fec_paso_a_paso(fv)
+                _render_fec_metricas(fv)
+
                 fec = MatrixFEC(cols=fec_vid_cols)
                 fec_bits, _, tx_html, padding = fec.encode(tx_bits)
-                with st.expander("🛡️ FEC Cabecera MP4", expanded=True):
+
+                with st.expander("🛡️ FEC Cabecera MP4 (Matriz)", expanded=False):
                     st.caption("Protegiendo metadata del contenedor (Atoms):")
                     st.markdown(tx_html, unsafe_allow_html=True)
+
+                # Constelación
+                with st.expander("📡 Constelación Video", expanded=False):
+                    mod = Modulator(mod_vid)
+                    sig = mod.modulate(fec_bits[:512])
+                    if len(sig) > 0:
+                        st.pyplot(mod.render_constellation(mod.channel_awgn(sig, ber_vid)))
+
                 meta = {"body_b64": base64.b64encode(body_bytes).decode('utf-8'),
                         "cols": fec_vid_cols, "padding": padding}
                 payload = {"modulo": "video", "metadata": meta,
                            "original_fec_bits": fec_bits,
                            "rx_bits": inject_bit_errors(fec_bits, ber_vid)}
+                section_label("⬇️", "DESCARGAS")
                 st.markdown(create_download_link(payload, "video_canal.bin"), unsafe_allow_html=True)
+                st.markdown(
+                    create_bytes_download_link(tx_bits.encode(), "nal_header_bits.txt",
+                                               "⬇ Descargar Bits Cabecera NAL"),
+                    unsafe_allow_html=True)
 
     with col_rx:
         section_label("📥", "RECEPCIÓN H.264")
@@ -1114,6 +1608,8 @@ def render_canal_video() -> None:
                 if syndromes:
                     st.warning("Síndromes no nulos. Reparando Atoms MP4...")
                     st.success(correction)
+                else:
+                    st.success("✅ Cabecera intacta — sin errores en canal video.")
             try:
                 source_bits = source_bits[:len(source_bits) - (len(source_bits) % 8)]
                 header_rx = bits_to_bytes(source_bits)
@@ -1122,6 +1618,11 @@ def render_canal_video() -> None:
                 st.success("Reconstrucción Exitosa: Cabecera NAL intacta.")
                 st.markdown("**Video Recibido:**")
                 st.video(full_video)
+                section_label("⬇️", "DESCARGAS Rx")
+                st.markdown(
+                    create_bytes_download_link(full_video, "video_recuperado.mp4",
+                                               "⬇ Descargar Video Recuperado MP4"),
+                    unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Video corrupto — ruido destruyó la estructura: {e}")
 
@@ -1156,6 +1657,12 @@ def render_fuente_texto() -> None:
         else: res = CodificadorRLE().comprimir(datos)
         render_resultado_compresion(res); render_pasos(res.pasos)
         render_arbol_huffman(res); render_descodificacion(res, "texto")
+        section_label("⬇️", "DESCARGAS — FUENTE CODIFICADA")
+        st.markdown(
+            create_bytes_download_link(res.datos_comprimidos,
+                                       f"fuente_{algo.lower()}_codificado.bin",
+                                       f"⬇ Descargar Fuente Codificada ({algo})"),
+            unsafe_allow_html=True)
 
 
 def render_fuente_imagen() -> None:
@@ -1187,6 +1694,12 @@ def render_fuente_imagen() -> None:
         else: res = CodificadorHuffman(datos).comprimir()
         render_resultado_compresion(res); render_pasos(res.pasos)
         render_arbol_huffman(res); render_descodificacion(res, "imagen")
+        section_label("⬇️", "DESCARGAS — FUENTE CODIFICADA")
+        st.markdown(
+            create_bytes_download_link(res.datos_comprimidos,
+                                       f"imagen_{llave.lower().replace(' ','_')}_codificada.bin",
+                                       f"⬇ Descargar Imagen Codificada ({llave})"),
+            unsafe_allow_html=True)
 
 
 def render_fuente_audio() -> None:
@@ -1218,6 +1731,12 @@ def render_fuente_audio() -> None:
         else: res = CodificadorHuffman(datos).comprimir()
         render_resultado_compresion(res); render_pasos(res.pasos)
         render_arbol_huffman(res); render_descodificacion(res, "audio")
+        section_label("⬇️", "DESCARGAS — FUENTE CODIFICADA")
+        st.markdown(
+            create_bytes_download_link(res.datos_comprimidos,
+                                       f"audio_{llave.lower().replace(' ','_').replace('.','')}_codificado.bin",
+                                       f"⬇ Descargar Audio Codificado ({llave})"),
+            unsafe_allow_html=True)
 
 
 def render_fuente_video() -> None:
@@ -1323,6 +1842,12 @@ def render_fuente_video() -> None:
         with c3: st.metric("Trama B (Bidireccional)", "20.0:1", "Máxima compresión")
         render_pasos(res.pasos)
         render_descodificacion(res, "video")
+        section_label("⬇️", "DESCARGAS — FUENTE CODIFICADA")
+        st.markdown(
+            create_bytes_download_link(res.datos_comprimidos,
+                                       "video_h264_sim_codificado.bin",
+                                       "⬇ Descargar Stream H.264 Simulado"),
+            unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
